@@ -1,0 +1,21 @@
+# Runtime state / secrets — never commit (repo is public)
+.env
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Downloaded models
+models/
+*.onnx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtualenvs
+.venv/
+venv/
