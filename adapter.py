@@ -168,6 +168,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._pending_update_version: Optional[str] = None
         self._update_offer_announced = False
         self._auto_restart_triggered = False
+        self._shutting_down = False
 
         # Gateway tool-onayı: bekleyen onay ({"id","session_key"}). Çekirdek
         # tehlikeli komutta send_exec_approval'ı çağırır → mac'e publish + TTS
@@ -417,6 +418,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         await self._speak_standalone(
             "Yeni sürüm indirilmiş, birkaç saniye içinde yeniden başlıyorum."
         )
+        self._shutting_down = True
         ok, out = await asyncio.to_thread(self._run_gateway_restart_detached)
         if ok:
             log.info("mate_voice: otomatik restart tetiklendi: %s", out.strip())
@@ -436,6 +438,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             f"Güncelledim, sürüm {version}. Birkaç saniye içinde yeniden başlıyorum."
         )
         self._auto_restart_triggered = True
+        self._shutting_down = True
         restarted, r_out = await asyncio.to_thread(self._run_gateway_restart_detached)
         if restarted:
             log.info("mate_voice: detached gateway restart planlandı: %s", r_out.strip())
@@ -777,6 +780,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
     async def disconnect(self) -> None:
         """Cancel consume/TTS tasks, stop reconnect + token server, leave room."""
         self._want_connected = False
+        self._shutting_down = True
         self._connected = False
         await self._stop_token_server()
         if self._update_check_task:
@@ -1357,6 +1361,15 @@ class MateVoiceAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id="empty")
         # Core busy-ack (İngilizce) → Türkçe kısa cümle; TTS + transkript ikisi de.
         content = _localize_busy_ack(content)
+        # Shutdown sırasında (SIGUSR1 self-restart) LiveKit bağlantısı kapanıyor;
+        # TTS'i beklemek notify_active_sessions fazını ~42sn asıyor. Transkripti
+        # yayınla (client "Gateway restarting" mesajını görsün) ama TTS'i BEKLEME.
+        if self._shutting_down:
+            asyncio.create_task(
+                self._publish_text(content, track_sid=self._pub_track_sid, role="assistant")
+            )
+            self._set_agent_state("idle")
+            return SendResult(success=True, message_id="shutting_down")
         # Assistant transcript line (best-effort, parallel).
         asyncio.create_task(
             self._publish_text(content, track_sid=self._pub_track_sid, role="assistant")
