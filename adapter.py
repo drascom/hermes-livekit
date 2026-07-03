@@ -175,6 +175,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # ile sorulur; sesli ("onayla"/"reddet") VEYA mate.approval.resolve RPC
         # ile resolve_gateway_approval üzerinden çözülür.
         self._pending_approval: Optional[dict] = None
+        self._update_offer_id = None
 
         # Eksik Python deps'i (onnxruntime/transformers/sherpa-onnx…) gateway
         # venv'ine kendi kur — Hermes installer deps kurmaz. Sadece ETKİN
@@ -411,9 +412,18 @@ class MateVoiceAdapter(BasePlatformAdapter):
         version = self._pending_update_version
         if not version:
             return
+        import uuid
+        from .update_check import installed_version
+        self._update_offer_id = uuid.uuid4().hex[:12]
+        payload = json.dumps({"id": self._update_offer_id,
+                              "from": installed_version(), "to": version})
+        try:
+            await self._room.local_participant.send_text(payload, topic="mate.update")
+        except Exception as e:
+            log.warning("mate_voice: mate.update publish hatası: %s", e)
         await self._speak_standalone(
             f"Bu arada, mate_voice için bir güncelleme var, sürüm {version}. "
-            "Yüklememi istersen 'güncelle' de."
+            "Yüklememi istersen 'güncelle' de ya da karttan onayla."
         )
 
     async def _auto_restart_for_update(self) -> None:
@@ -737,11 +747,30 @@ class MateVoiceAdapter(BasePlatformAdapter):
                      data.caller_identity, choice)
             return json.dumps({"ok": True, "choice": choice})
 
+        async def _rpc_update_resolve(data: "rtc.RpcInvocationData") -> str:
+            try:
+                req = json.loads(data.payload or "{}")
+                action = str(req.get("action") or "")
+            except (ValueError, TypeError):
+                raise rtc.RpcError(code=400, message="bad payload")
+            version = self._pending_update_version
+            self._pending_update_version = None
+            self._update_offer_announced = False
+            asyncio.create_task(self._close_update_card())
+            if action == "apply" and version:
+                log.info("mate_voice: güncelleme karttan onaylandı (%s)", version)
+                asyncio.create_task(self._apply_update(version))
+            else:
+                log.info("mate_voice: güncelleme karttan ertelendi (%s)", action)
+            return json.dumps({"ok": True, "action": action})
+
         try:
             room.local_participant.register_rpc_method("mate.hello", _rpc_hello)
             room.local_participant.register_rpc_method("mate.set_awake", _rpc_set_awake)
             room.local_participant.register_rpc_method(
                 "mate.approval.resolve", _rpc_approval_resolve)
+            room.local_participant.register_rpc_method(
+                "mate.update.resolve", _rpc_update_resolve)
         except Exception as e:
             log.warning("mate_voice: RPC kayıt atlandı (%r)", e)
 
@@ -1054,6 +1083,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             version = self._pending_update_version
             self._pending_update_version = None
             self._update_offer_announced = False
+            asyncio.create_task(self._close_update_card())
             if is_affirmative_reply(text):
                 log.info("mate_voice: güncelleme onaylandı (%s)", version)
                 asyncio.create_task(self._apply_update(version))
@@ -1185,6 +1215,17 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             await self._room.local_participant.send_text(
                 json.dumps({"id": aid, "resolved": True}), topic="mate.approval")
+        except Exception:
+            pass
+
+    async def _close_update_card(self) -> None:
+        aid = self._update_offer_id
+        self._update_offer_id = None
+        if not aid:
+            return
+        try:
+            await self._room.local_participant.send_text(
+                json.dumps({"id": aid, "resolved": True}), topic="mate.update")
         except Exception:
             pass
 
