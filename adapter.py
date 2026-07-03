@@ -42,6 +42,7 @@ from gateway.platforms.base import (
     SendResult,
 )
 from gateway.config import Platform
+from gateway.session import build_session_key
 
 from .update_check import PLUGIN_IDENTIFIER, check_for_update, is_affirmative_reply
 from .voice.config import settings
@@ -54,6 +55,27 @@ logger = logging.getLogger(__name__)
 log = logger  # parity with ported code
 
 PLATFORM_NAME = "mate_voice"
+
+# Gateway tool-onayı (approval) köprüsü — BEST-EFFORT: eski Hermes çekirdeğinde
+# bu API olmayabilir → yoksa özellik sessizce devre dışı (plugin çökmez).
+try:
+    from tools.approval import (
+        register_gateway_notify,
+        unregister_gateway_notify,
+        resolve_gateway_approval,
+        has_blocking_approval,
+    )
+    _APPROVAL_AVAILABLE = True
+except ImportError as _approval_import_err:  # pragma: no cover
+    register_gateway_notify = None  # type: ignore[assignment]
+    unregister_gateway_notify = None  # type: ignore[assignment]
+    resolve_gateway_approval = None  # type: ignore[assignment]
+    has_blocking_approval = None  # type: ignore[assignment]
+    _APPROVAL_AVAILABLE = False
+    logger.warning(
+        "mate_voice: gateway approval API yok, tool-onay özelliği devre dışı: %r",
+        _approval_import_err,
+    )
 
 # Hermes CORE, meşgul agent'a ikinci söz gelince İngilizce bir busy-ack üretir
 # ("⚡ Interrupting current task (iteration N/M). I'll respond..."). Core'a
@@ -148,6 +170,13 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._update_check_task: Optional[asyncio.Task] = None
         self._pending_update_version: Optional[str] = None
         self._update_offer_announced = False
+
+        # Gateway tool-onayı: bekleyen onay ({"id","session_key"}) ve notify
+        # kaydettiğimiz session_key'ler. Onay geldiğinde mac'e publish + TTS ile
+        # sorulur; sesli ("onayla"/"reddet") VEYA mate.approval.resolve RPC ile
+        # çözülür (bkz. _make_approval_notify / _present_approval).
+        self._pending_approval: Optional[dict] = None
+        self._approval_registered: set = set()
 
         # Eksik Python deps'i (onnxruntime/transformers/sherpa-onnx…) gateway
         # venv'ine kendi kur — Hermes installer deps kurmaz. Sadece ETKİN
@@ -661,9 +690,32 @@ class MateVoiceAdapter(BasePlatformAdapter):
             log.info("mate_voice: mate.set_awake (%s): %s", ident, awake)
             return json.dumps({"ok": True, "awake": awake})
 
+        async def _rpc_approval_resolve(data: "rtc.RpcInvocationData") -> str:
+            try:
+                req = json.loads(data.payload or "{}")
+                aid = str(req.get("id") or "")
+                choice = str(req.get("choice") or "")
+            except (ValueError, TypeError):
+                raise rtc.RpcError(code=400, message="bad payload")
+            if choice not in ("once", "session", "always", "deny"):
+                raise rtc.RpcError(code=400, message="bad choice")
+            pa = self._pending_approval
+            if pa and (not aid or pa["id"] == aid):
+                self._pending_approval = None
+                try:
+                    resolve_gateway_approval(pa["session_key"], choice)
+                except Exception as e:
+                    log.warning("mate_voice: approval RPC resolve hatası: %s", e)
+                asyncio.create_task(self._close_approval(pa["id"]))
+            log.info("mate_voice: mate.approval.resolve (%s): %s",
+                     data.caller_identity, choice)
+            return json.dumps({"ok": True, "choice": choice})
+
         try:
             room.local_participant.register_rpc_method("mate.hello", _rpc_hello)
             room.local_participant.register_rpc_method("mate.set_awake", _rpc_set_awake)
+            room.local_participant.register_rpc_method(
+                "mate.approval.resolve", _rpc_approval_resolve)
         except Exception as e:
             log.warning("mate_voice: RPC kayıt atlandı (%r)", e)
 
@@ -719,6 +771,16 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._tts_task:
             self._tts_task.cancel()
             self._tts_task = None
+        # Gateway tool-onayı: kayıtlı notify cb'leri bırak (bloke thread'ler
+        # sinyallensin) ve bekleyen onayı temizle.
+        if _APPROVAL_AVAILABLE:
+            for sk in list(self._approval_registered):
+                try:
+                    unregister_gateway_notify(sk)
+                except Exception:
+                    pass
+        self._approval_registered.clear()
+        self._pending_approval = None
         room, self._room, self._source = self._room, None, None
         if room is not None:
             try:
@@ -928,6 +990,29 @@ class MateVoiceAdapter(BasePlatformAdapter):
         log.info("mate_voice: duyuldu %r", text)
         self._debug(f"stt_final: {text[:40]}" if text else "stt_final: (boş)")
 
+        # Bekleyen tool-onayı: yanıt awake durumundan BAĞIMSIZ çözülmeli
+        # (wake-gate'ten ÖNCE). Söz bir onay-kelimesi içeriyorsa çöz + dön.
+        if self._pending_approval is not None and text:
+            pa = self._pending_approval
+            low = text.casefold()
+            choice = None
+            if any(w in low for w in ("reddet", "hayır", "hayir", "iptal", "izin verme", "olmaz")):
+                choice = "deny"
+            elif any(w in low for w in ("her zaman", "sürekli", "surekli", "hep")):
+                choice = "always"
+            elif any(w in low for w in ("onayla", "evet", "izin ver", "tamam", "olur", "kabul")):
+                choice = "once"
+            if choice is not None:
+                self._pending_approval = None
+                try:
+                    resolve_gateway_approval(pa["session_key"], choice)
+                except Exception as e:
+                    log.warning("mate_voice: approval resolve hatası: %s", e)
+                asyncio.create_task(self._close_approval(pa["id"]))
+                log.info("mate_voice: onay sesli çözüldü: %s", choice)
+                self._set_agent_state("idle")
+                return
+
         wake_at = self._wake_at
         is_wake_word = bool(wake_at) and (
             utterance_start_at < wake_at - WAKE_PROPAGATION_TOLERANCE_S
@@ -1029,6 +1114,33 @@ class MateVoiceAdapter(BasePlatformAdapter):
             user_id=user_id,
             user_name=user_name,
         )
+
+        # Gateway tool-onayı: bu oturum için notify cb'yi bir kez kaydet. Onay
+        # gerektiren bir araç çalışırsa çekirdek bu session_key ile cb'yi çağırır
+        # (agent thread) → _present_approval mac'e sorar. session_key, çekirdeğin
+        # get_current_session_key() ile çözdüğüyle AYNI olmalı → base ile birebir
+        # aynı şekilde build_session_key'den hesapla (gateway/platforms/base.py).
+        if _APPROVAL_AVAILABLE:
+            try:
+                session_key = build_session_key(
+                    source,
+                    group_sessions_per_user=self.config.extra.get(
+                        "group_sessions_per_user", True),
+                    thread_sessions_per_user=self.config.extra.get(
+                        "thread_sessions_per_user", False),
+                )
+            except Exception as e:
+                session_key = None
+                log.warning("mate_voice: session_key hesaplanamadı: %s", e)
+            if session_key and session_key not in self._approval_registered:
+                try:
+                    register_gateway_notify(
+                        session_key, self._make_approval_notify(session_key))
+                    self._approval_registered.add(session_key)
+                    log.info("mate_voice: approval notify kaydedildi: %s", session_key)
+                except Exception as e:
+                    log.warning("mate_voice: approval notify kayıt hatası: %s", e)
+
         self._set_agent_state("thinking")
         prev_speaker_id = self._active_turn_speaker_id
         self._active_turn_speaker_id = speaker_id
@@ -1044,6 +1156,51 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._pending_update_version and not self._update_offer_announced:
             self._update_offer_announced = True
             asyncio.create_task(self._announce_update())
+
+    # ── Gateway tool-onayı (approval gidip-gel) ──────────────────────────
+    def _make_approval_notify(self, session_key):
+        """register_gateway_notify için sync cb üret. cb AGENT thread'inde
+        çağrılır → gerçek işi (publish + TTS) event loop'a köprüle."""
+        loop = asyncio.get_event_loop()
+
+        def _cb(approval_data):
+            try:
+                loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(
+                        self._present_approval(session_key, dict(approval_data)))
+                )
+            except Exception as e:
+                log.warning("mate_voice: approval notify köprü hatası: %s", e)
+
+        return _cb
+
+    async def _present_approval(self, session_key, approval_data):
+        """Onayı mac'e publish et (topic mate.approval) + TTS ile sesli sor."""
+        import uuid
+        aid = uuid.uuid4().hex[:12]
+        self._pending_approval = {"id": aid, "session_key": session_key}
+        command = str(approval_data.get("command") or "")
+        description = str(approval_data.get("description") or command)
+        payload = json.dumps({
+            "id": aid, "command": command, "description": description,
+            "options": ["once", "always", "deny"],
+        })
+        try:
+            await self._room.local_participant.send_text(payload, topic="mate.approval")
+        except Exception as e:
+            log.warning("mate_voice: mate.approval publish hatası: %s", e)
+        await self._speak_standalone(
+            f"Şunu yapmak için iznini istiyorum: {description}. "
+            "'onayla', 'sürekli izin ver' ya da 'reddet' de."
+        )
+
+    async def _close_approval(self, aid):
+        """Onay çözüldü — mac tarafındaki kartı kapat (resolved işareti)."""
+        try:
+            await self._room.local_participant.send_text(
+                json.dumps({"id": aid, "resolved": True}), topic="mate.approval")
+        except Exception:
+            pass
 
     async def _should_barge_in(self, pcm: bytes) -> bool:
         if not self.settings.barge_in_speaker_gate:
