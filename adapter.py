@@ -1066,11 +1066,18 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # isteği işle (2. tur). Tanınan ses bu daldan geçmez → normal dispatch.
         if self.speaker is not None and self.speaker_store is not None and speaker_id is None:
             if self._pending_enroll is not None:
+                # Enroll ortasında: isim yanıtı (kısa olabilir) → tamamla.
                 await self._complete_enrollment(text, emb, participant, track)
-            else:
+                return
+            # Bilinmeyen + enroll ortasında değil: isim sormayı SADECE yeterince
+            # uzun söz için başlat (kısa 1-2 kelime → çöp isim riski). Kısa söz →
+            # isim sorma, guest olarak devam.
+            dur_s = len(pcm) / (STT_RATE * STT_WIDTH * STT_CHANNELS)
+            if dur_s >= self.settings.speaker_enroll_min_seconds:
                 await self._begin_enrollment(text, emb, participant)
-            return
-
+                return
+            log.info("mate_voice: kısa söz (%.1fs < %.1fs), enroll atlandı → guest",
+                     dur_s, self.settings.speaker_enroll_min_seconds)
         await self._dispatch_turn(text, speaker, speaker_id, participant, track)
 
     async def _handle_text_input(self, reader, participant) -> None:
