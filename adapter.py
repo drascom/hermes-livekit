@@ -397,6 +397,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         """Bir konuşma turuna bağlı olmayan tek seferlik TTS (duyuru/sonuç).
         _speak() artık parça-arası "thinking" ile bitiyor (bkz. send()) —
         burada turu biz kapatıyoruz, idle'a biz dönüyoruz."""
+        asyncio.create_task(
+            self._publish_text(text, track_sid=self._pub_track_sid, role="assistant")
+        )
         self._tts_task = asyncio.create_task(self._speak(text))
         try:
             await self._tts_task
