@@ -65,6 +65,7 @@ _BUSY_ACK_REPLIES = (
     "Bir saniye, ona bakıyorum…",
     "Tamam, not aldım — birazdan dönüyorum.",
     "Anladım, hemen ilgileniyorum.",
+    "Bir dakika, onu bitirip sana döneceğim.",
 )
 def _localize_busy_ack(text: str) -> str:
     """Core busy-ack ise Türkçe bir cümleyle değiştir (rastgele); değilse aynen bırak."""
