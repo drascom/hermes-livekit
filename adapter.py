@@ -42,7 +42,6 @@ from gateway.platforms.base import (
     SendResult,
 )
 from gateway.config import Platform
-from gateway.session import build_session_key
 
 from .update_check import PLUGIN_IDENTIFIER, check_for_update, is_affirmative_reply
 from .voice.config import settings
@@ -56,24 +55,15 @@ log = logger  # parity with ported code
 
 PLATFORM_NAME = "mate_voice"
 
-# Gateway tool-onayı (approval) köprüsü — BEST-EFFORT: eski Hermes çekirdeğinde
-# bu API olmayabilir → yoksa özellik sessizce devre dışı (plugin çökmez).
+# Gateway tool-onayı (approval) resolve — BEST-EFFORT: eski Hermes çekirdeğinde
+# bu API olmayabilir → yoksa resolve çağrıları sessizce düşer (plugin çökmez).
+# Onay TESLİMİ send_exec_approval metodu ile (çekirdek otomatik çağırır).
 try:
-    from tools.approval import (
-        register_gateway_notify,
-        unregister_gateway_notify,
-        resolve_gateway_approval,
-        has_blocking_approval,
-    )
-    _APPROVAL_AVAILABLE = True
+    from tools.approval import resolve_gateway_approval
 except ImportError as _approval_import_err:  # pragma: no cover
-    register_gateway_notify = None  # type: ignore[assignment]
-    unregister_gateway_notify = None  # type: ignore[assignment]
     resolve_gateway_approval = None  # type: ignore[assignment]
-    has_blocking_approval = None  # type: ignore[assignment]
-    _APPROVAL_AVAILABLE = False
     logger.warning(
-        "mate_voice: gateway approval API yok, tool-onay özelliği devre dışı: %r",
+        "mate_voice: gateway approval resolve API yok, tool-onay resolve devre dışı: %r",
         _approval_import_err,
     )
 
@@ -171,12 +161,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._pending_update_version: Optional[str] = None
         self._update_offer_announced = False
 
-        # Gateway tool-onayı: bekleyen onay ({"id","session_key"}) ve notify
-        # kaydettiğimiz session_key'ler. Onay geldiğinde mac'e publish + TTS ile
-        # sorulur; sesli ("onayla"/"reddet") VEYA mate.approval.resolve RPC ile
-        # çözülür (bkz. _make_approval_notify / _present_approval).
+        # Gateway tool-onayı: bekleyen onay ({"id","session_key"}). Çekirdek
+        # tehlikeli komutta send_exec_approval'ı çağırır → mac'e publish + TTS
+        # ile sorulur; sesli ("onayla"/"reddet") VEYA mate.approval.resolve RPC
+        # ile resolve_gateway_approval üzerinden çözülür.
         self._pending_approval: Optional[dict] = None
-        self._approval_registered: set = set()
 
         # Eksik Python deps'i (onnxruntime/transformers/sherpa-onnx…) gateway
         # venv'ine kendi kur — Hermes installer deps kurmaz. Sadece ETKİN
@@ -771,15 +760,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._tts_task:
             self._tts_task.cancel()
             self._tts_task = None
-        # Gateway tool-onayı: kayıtlı notify cb'leri bırak (bloke thread'ler
-        # sinyallensin) ve bekleyen onayı temizle.
-        if _APPROVAL_AVAILABLE:
-            for sk in list(self._approval_registered):
-                try:
-                    unregister_gateway_notify(sk)
-                except Exception:
-                    pass
-        self._approval_registered.clear()
+        # Gateway tool-onayı: bekleyen onayı temizle.
         self._pending_approval = None
         room, self._room, self._source = self._room, None, None
         if room is not None:
@@ -1114,33 +1095,6 @@ class MateVoiceAdapter(BasePlatformAdapter):
             user_id=user_id,
             user_name=user_name,
         )
-
-        # Gateway tool-onayı: bu oturum için notify cb'yi bir kez kaydet. Onay
-        # gerektiren bir araç çalışırsa çekirdek bu session_key ile cb'yi çağırır
-        # (agent thread) → _present_approval mac'e sorar. session_key, çekirdeğin
-        # get_current_session_key() ile çözdüğüyle AYNI olmalı → base ile birebir
-        # aynı şekilde build_session_key'den hesapla (gateway/platforms/base.py).
-        if _APPROVAL_AVAILABLE:
-            try:
-                session_key = build_session_key(
-                    source,
-                    group_sessions_per_user=self.config.extra.get(
-                        "group_sessions_per_user", True),
-                    thread_sessions_per_user=self.config.extra.get(
-                        "thread_sessions_per_user", False),
-                )
-            except Exception as e:
-                session_key = None
-                log.warning("mate_voice: session_key hesaplanamadı: %s", e)
-            if session_key and session_key not in self._approval_registered:
-                try:
-                    register_gateway_notify(
-                        session_key, self._make_approval_notify(session_key))
-                    self._approval_registered.add(session_key)
-                    log.info("mate_voice: approval notify kaydedildi: %s", session_key)
-                except Exception as e:
-                    log.warning("mate_voice: approval notify kayıt hatası: %s", e)
-
         self._set_agent_state("thinking")
         prev_speaker_id = self._active_turn_speaker_id
         self._active_turn_speaker_id = speaker_id
@@ -1158,41 +1112,28 @@ class MateVoiceAdapter(BasePlatformAdapter):
             asyncio.create_task(self._announce_update())
 
     # ── Gateway tool-onayı (approval gidip-gel) ──────────────────────────
-    def _make_approval_notify(self, session_key):
-        """register_gateway_notify için sync cb üret. cb AGENT thread'inde
-        çağrılır → gerçek işi (publish + TTS) event loop'a köprüle."""
-        loop = asyncio.get_event_loop()
-
-        def _cb(approval_data):
-            try:
-                loop.call_soon_threadsafe(
-                    lambda: asyncio.create_task(
-                        self._present_approval(session_key, dict(approval_data)))
-                )
-            except Exception as e:
-                log.warning("mate_voice: approval notify köprü hatası: %s", e)
-
-        return _cb
-
-    async def _present_approval(self, session_key, approval_data):
-        """Onayı mac'e publish et (topic mate.approval) + TTS ile sesli sor."""
+    async def send_exec_approval(self, chat_id: str, command: str, session_key: str,
+                                 description: str = "dangerous command",
+                                 metadata: "Optional[dict]" = None) -> "SendResult":
+        """Çekirdek tehlikeli komut için otomatik çağırır (buton-bazlı onay
+        extension point). mate.approval'a publish + TTS ile sesli sor + pending
+        state. Onay sesli gate veya mate.approval.resolve RPC'sinden
+        resolve_gateway_approval ile döner."""
         import uuid
         aid = uuid.uuid4().hex[:12]
         self._pending_approval = {"id": aid, "session_key": session_key}
-        command = str(approval_data.get("command") or "")
-        description = str(approval_data.get("description") or command)
-        payload = json.dumps({
-            "id": aid, "command": command, "description": description,
-            "options": ["once", "always", "deny"],
-        })
+        desc = str(description or command or "bir işlem")
+        payload = json.dumps({"id": aid, "command": str(command or ""),
+                              "description": desc, "options": ["once", "always", "deny"]})
         try:
             await self._room.local_participant.send_text(payload, topic="mate.approval")
         except Exception as e:
             log.warning("mate_voice: mate.approval publish hatası: %s", e)
         await self._speak_standalone(
-            f"Şunu yapmak için iznini istiyorum: {description}. "
+            f"Şunu yapmak için iznini istiyorum: {desc}. "
             "'onayla', 'sürekli izin ver' ya da 'reddet' de."
         )
+        return SendResult(success=True, message_id=aid)
 
     async def _close_approval(self, aid):
         """Onay çözüldü — mac tarafındaki kartı kapat (resolved işareti)."""
