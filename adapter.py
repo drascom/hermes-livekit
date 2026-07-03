@@ -27,6 +27,7 @@ memory + auto-enrollment persistence is Phase 2 (see MAP.md / BLOCKER notes).
 """
 
 import asyncio
+import random
 import json
 import logging
 import re
@@ -54,6 +55,23 @@ log = logger  # parity with ported code
 
 PLATFORM_NAME = "mate_voice"
 
+# Hermes CORE, meşgul agent'a ikinci söz gelince İngilizce bir busy-ack üretir
+# ("⚡ Interrupting current task (iteration N/M). I'll respond..."). Core'a
+# DOKUNMUYORUZ; giden metin bu plugin'in send() yolundan geçtiği için burada
+# yakalayıp Türkçe kısa bir cümleyle DEĞİŞTİRİYORUZ (iteration sayısı gösterilmez).
+# Değişim HEM TTS'e HEM transkripte uygulanır → İngilizce kullanıcıya hiç ulaşmaz.
+_BUSY_ACK_MARKERS = ("Interrupting current task", "⏳ Working")
+_BUSY_ACK_REPLIES = (
+    "Bir saniye, ona bakıyorum…",
+    "Tamam, not aldım — birazdan dönüyorum.",
+    "Anladım, hemen ilgileniyorum.",
+)
+def _localize_busy_ack(text: str) -> str:
+    """Core busy-ack ise Türkçe bir cümleyle değiştir (rastgele); değilse aynen bırak."""
+    if text and any(marker in text for marker in _BUSY_ACK_MARKERS):
+        return random.choice(_BUSY_ACK_REPLIES)
+    return text
+
 # --- Endpointing / audio constants (1:1 with livekit_agent.py) ---
 SILENCE_RMS = 700
 SILENCE_AFTER_S = 1.0
@@ -71,7 +89,7 @@ STT_WIDTH = 2
 STT_CHANNELS = 1
 PUB_RATE = 48000
 PUB_CHANNELS = 1
-UPDATE_CHECK_INTERVAL_S = 6 * 3600
+UPDATE_CHECK_INTERVAL_S = 5 * 60  # test: sık kontrol (otomatik deploy'u gözlemek için)
 
 
 class MateVoiceAdapter(BasePlatformAdapter):
@@ -1175,6 +1193,8 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if not content or not content.strip():
             self._set_agent_state("idle")
             return SendResult(success=True, message_id="empty")
+        # Core busy-ack (İngilizce) → Türkçe kısa cümle; TTS + transkript ikisi de.
+        content = _localize_busy_ack(content)
         # Assistant transcript line (best-effort, parallel).
         asyncio.create_task(
             self._publish_text(content, track_sid=self._pub_track_sid, role="assistant")
