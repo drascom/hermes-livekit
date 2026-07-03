@@ -43,7 +43,14 @@ from gateway.platforms.base import (
 )
 from gateway.config import Platform
 
-from .update_check import PLUGIN_IDENTIFIER, check_for_update, is_affirmative_reply
+from .update_check import (
+    PLUGIN_IDENTIFIER,
+    RUNNING_VERSION,
+    check_for_update,
+    installed_version,
+    is_affirmative_reply,
+    is_newer,
+)
 from .voice.config import settings
 from .voice.hallucination import looks_hallucinated
 from .voice.services import WhisperSession
@@ -160,6 +167,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._update_check_task: Optional[asyncio.Task] = None
         self._pending_update_version: Optional[str] = None
         self._update_offer_announced = False
+        self._auto_restart_triggered = False
 
         # Gateway tool-onayı: bekleyen onay ({"id","session_key"}). Çekirdek
         # tehlikeli komutta send_exec_approval'ı çağırır → mac'e publish + TTS
@@ -363,6 +371,17 @@ class MateVoiceAdapter(BasePlatformAdapter):
             await asyncio.sleep(UPDATE_CHECK_INTERVAL_S)
             if not self._want_connected or self._pending_update_version:
                 continue
+            # Path-independent aktivasyon: güncellemeyi kim uygularsa uygulasın
+            # (plugin akışı / LLM ajanı / elle) disk sürümü çalışandan yeniyse
+            # otomatik SIGUSR1 restart ile aktive et. RUNNING_VERSION "0" ise
+            # (bilinmiyor) atla — yanlış tetikleme olmasın.
+            if (not self._auto_restart_triggered and RUNNING_VERSION != "0"
+                    and is_newer(installed_version(), RUNNING_VERSION)):
+                self._auto_restart_triggered = True
+                log.info("mate_voice: disk sürümü (%s) > çalışan (%s) → otomatik restart",
+                         installed_version(), RUNNING_VERSION)
+                asyncio.create_task(self._auto_restart_for_update())
+                continue
             try:
                 latest = await check_for_update()
             except Exception as e:
@@ -393,6 +412,17 @@ class MateVoiceAdapter(BasePlatformAdapter):
             "Yüklememi istersen 'güncelle' de."
         )
 
+    async def _auto_restart_for_update(self) -> None:
+        """Disk'te daha yeni sürüm var ama çalışan kod eski → SIGUSR1 ile aktive et."""
+        await self._speak_standalone(
+            "Yeni sürüm indirilmiş, birkaç saniye içinde yeniden başlıyorum."
+        )
+        ok, out = await asyncio.to_thread(self._run_gateway_restart_detached)
+        if ok:
+            log.info("mate_voice: otomatik restart tetiklendi: %s", out.strip())
+        else:
+            log.warning("mate_voice: otomatik restart tetiklenemedi: %s", out)
+
     async def _apply_update(self, version: str) -> None:
         log.info("mate_voice: güncelleme uygulanıyor → %s", version)
         await self._speak_standalone("Tamam, güncelliyorum, bir saniye.")
@@ -405,6 +435,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         await self._speak_standalone(
             f"Güncelledim, sürüm {version}. Birkaç saniye içinde yeniden başlıyorum."
         )
+        self._auto_restart_triggered = True
         restarted, r_out = await asyncio.to_thread(self._run_gateway_restart_detached)
         if restarted:
             log.info("mate_voice: detached gateway restart planlandı: %s", r_out.strip())

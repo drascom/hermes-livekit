@@ -58,6 +58,11 @@ def installed_version() -> str:
         return "0"
 
 
+# Bu süreç yüklendiğinde diskteki sürüm = ÇALIŞAN kodun sürümü. Sonradan disk
+# güncellenirse installed_version() bunu aşar → adapter otomatik restart tetikler.
+RUNNING_VERSION = installed_version()
+
+
 def _version_tuple(v: str) -> tuple:
     parts = []
     for p in v.strip().split("."):
@@ -173,25 +178,21 @@ def run_gateway_restart() -> tuple[bool, str]:
 
 
 def run_gateway_restart_detached() -> tuple[bool, str]:
-    """Bu (plugin'in kendi) sürecinden bağımsız, gecikmeli bir gateway restart planla.
+    """Graceful, drain-aware gateway self-restart via SIGUSR1.
 
-    Doğrudan `systemctl restart` çağrı dönmeden gateway'i — dolayısıyla bu plugin'i —
-    öldürür. `systemd-run --on-active` birkaç saniye sonra ateşleyen geçici bir timer
-    kurar; böylece önce konuşmayı bitirir, restart temiz devreye girer.
+    Gateway, SIGUSR1'i (gateway/run.py) request_restart(via_service=True)'ye bağlar:
+    uçuştaki turları drain eder, çıkar, systemd/launchd yeniden başlatır. Destekli
+    self-restart yolu — sudo yok, SIGTERM/SIGKILL yok, shutdown-hang'i önler. Plugin
+    gateway sürecinin içinde çalıştığı için kendi PID'imize sinyal handler'a ulaşır.
     """
+    import os
+    import signal
+    if not hasattr(signal, "SIGUSR1"):
+        return False, "SIGUSR1 bu platformda yok"
+    pid = os.getpid()
     try:
-        result = subprocess.run(
-            ["sudo", "systemd-run", "--on-active=3",
-             "systemctl", "restart", "hermes-gateway"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            return True, (result.stdout or "") + (result.stderr or "")
-        fb = subprocess.run(
-            ["sudo", "systemctl", "restart", "--no-block", "hermes-gateway"],
-            capture_output=True, text=True, timeout=30,
-        )
-        return fb.returncode == 0, (result.stderr or "") + "\n" + (fb.stdout or "") + (fb.stderr or "")
+        os.kill(pid, signal.SIGUSR1)
+        return True, f"SIGUSR1 gönderildi (pid {pid})"
     except Exception as e:
         return False, repr(e)
 
