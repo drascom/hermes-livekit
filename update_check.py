@@ -172,6 +172,30 @@ def run_gateway_restart() -> tuple[bool, str]:
         return False, repr(e)
 
 
+def run_gateway_restart_detached() -> tuple[bool, str]:
+    """Bu (plugin'in kendi) sürecinden bağımsız, gecikmeli bir gateway restart planla.
+
+    Doğrudan `systemctl restart` çağrı dönmeden gateway'i — dolayısıyla bu plugin'i —
+    öldürür. `systemd-run --on-active` birkaç saniye sonra ateşleyen geçici bir timer
+    kurar; böylece önce konuşmayı bitirir, restart temiz devreye girer.
+    """
+    try:
+        result = subprocess.run(
+            ["sudo", "systemd-run", "--on-active=3",
+             "systemctl", "restart", "hermes-gateway"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return True, (result.stdout or "") + (result.stderr or "")
+        fb = subprocess.run(
+            ["sudo", "systemctl", "restart", "--no-block", "hermes-gateway"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return fb.returncode == 0, (result.stderr or "") + "\n" + (fb.stdout or "") + (fb.stderr or "")
+    except Exception as e:
+        return False, repr(e)
+
+
 def run_check_update_cli() -> int:
     latest = asyncio.run(check_for_update())
     current = installed_version()

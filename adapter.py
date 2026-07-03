@@ -379,22 +379,31 @@ class MateVoiceAdapter(BasePlatformAdapter):
         log.info("mate_voice: güncelleme uygulanıyor → %s", version)
         await self._speak_standalone("Tamam, güncelliyorum, bir saniye.")
         ok, output = await asyncio.to_thread(self._run_install_force)
-        if ok:
-            log.info("mate_voice: güncelleme tamam (%s)", version)
-            msg = (
-                f"Güncellendi, sürüm {version}. Etkili olması için gateway'in "
-                "yeniden başlatılması gerekiyor: hermes gateway restart."
-            )
-        else:
+        if not ok:
             log.warning("mate_voice: güncelleme başarısız: %s", output)
-            msg = "Güncelleme başarısız oldu, loglara bakman gerekebilir."
-        await self._speak_standalone(msg)
+            await self._speak_standalone("Güncelleme başarısız oldu, loglara bakman gerekebilir.")
+            return
+        log.info("mate_voice: güncelleme tamam (%s)", version)
+        await self._speak_standalone(
+            f"Güncelledim, sürüm {version}. Birkaç saniye içinde yeniden başlıyorum."
+        )
+        restarted, r_out = await asyncio.to_thread(self._run_gateway_restart_detached)
+        if restarted:
+            log.info("mate_voice: detached gateway restart planlandı: %s", r_out.strip())
+        else:
+            log.warning("mate_voice: gateway restart tetiklenemedi: %s", r_out)
 
     @staticmethod
     def _run_install_force() -> tuple:
         from .update_check import run_install_force
 
         return run_install_force()
+
+    @staticmethod
+    def _run_gateway_restart_detached() -> tuple:
+        from .update_check import run_gateway_restart_detached
+
+        return run_gateway_restart_detached()
 
     async def _handle_health(self, request):
         from aiohttp import web
