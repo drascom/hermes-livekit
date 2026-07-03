@@ -604,6 +604,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 except RuntimeError:
                     pass
 
+        def _on_chat_text(reader, participant_identity):
+            # Yazılı sohbet girişi (client TextMessageSender → topic "lk.chat").
+            # livekit callback SYNC → async işe sar.
+            participant = room.remote_participants.get(participant_identity)
+            asyncio.create_task(self._handle_text_input(reader, participant))
+
+        room.register_text_stream_handler("lk.chat", _on_chat_text)
+
         self._attr_cache = {}
         self._awake_state = {}
         self._greeted_speakers = set()
@@ -963,6 +971,21 @@ class MateVoiceAdapter(BasePlatformAdapter):
             return
 
         await self._dispatch_turn(text, speaker, speaker_id, participant, track)
+
+    async def _handle_text_input(self, reader, participant) -> None:
+        """Client'tan yazılı sohbet mesajı (topic 'lk.chat'). Sesli tur gibi
+        işlenir ama wake-gate/speaker-ID YOK (yazı = açık niyet). Kullanıcı metni
+        _dispatch_turn içinde lk.transcription'a echo'lanır → chat'te görünür."""
+        try:
+            text = (await reader.read_all()).strip()
+        except Exception as e:
+            log.warning("mate_voice: yazılı giriş okunamadı: %s", e)
+            return
+        if not text:
+            return
+        ident = getattr(participant, "identity", None)
+        log.info("mate_voice: yazılı giriş %r (%s)", text[:80], ident)
+        await self._dispatch_turn(text, None, None, participant, None)
 
     async def _dispatch_turn(self, text, speaker, speaker_id, participant, track) -> None:
         """Bir turu Hermes'e ver: aktif-konuşmacı UI + kullanıcı transkripti +
