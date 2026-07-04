@@ -80,11 +80,14 @@ except ImportError as _approval_import_err:  # pragma: no cover
 # yakalayıp Türkçe kısa bir cümleyle DEĞİŞTİRİYORUZ (iteration sayısı gösterilmez).
 # Değişim HEM TTS'e HEM transkripte uygulanır → İngilizce kullanıcıya hiç ulaşmaz.
 _BUSY_ACK_MARKERS = ("Interrupting current task", "⏳ Working")
+# Core "⚡ Interrupting current task" = ÇALIŞAN işi BIRAKIP yeni söze geçiyor.
+# Bu yüzden ack'ler "eskiyi bitirip döneceğim" (queue) DEĞİL, "bırakıp yeniye
+# geçiyorum" (interrupt) semantiğinde olmalı — aksi hâlde yanlış izlenim verir.
 _BUSY_ACK_REPLIES = (
-    "Bir saniye, ona bakıyorum…",
-    "Tamam, not aldım — birazdan dönüyorum.",
-    "Anladım, hemen ilgileniyorum.",
-    "Bir dakika, onu bitirip sana döneceğim.",
+    "Tamam, ona geçiyorum.",
+    "Peki, şimdi ona bakıyorum.",
+    "Anladım, hemen ona geçiyorum.",
+    "Tamam, bırakıp ona bakıyorum.",
 )
 def _localize_busy_ack(text: str) -> str:
     """Core busy-ack ise Türkçe bir cümleyle değiştir (rastgele); değilse aynen bırak."""
