@@ -106,6 +106,14 @@ def _format_cron_message(t: str) -> str:
     body = body.strip()
     return f"⏰ Hatırlatma: {body}" if body else "⏰ Bir hatırlatman var."
 
+def _parse_cron(t: str):
+    """'Cronjob Response: <başlık>\\n(job_id..)\\n----\\n<gövde>\\n\\nTo stop...'
+    → (başlık, gövde)."""
+    first = t.split("\n", 1)[0]
+    title = first.replace("Cronjob Response:", "").strip()
+    body = _format_cron_message(t).replace("⏰ Hatırlatma:", "").strip()
+    return title, body
+
 def _classify_system_message(text: str):
     """(içerik|None, göster: bool, seslendir: bool) döndürür.
     None → mesaj tamamen atlanır. Normal ajan cevabı → (text, True, True)."""
@@ -131,7 +139,8 @@ def _classify_system_message(text: str):
         return ("↻ Kapanıyorum, kısa süre bölüyorum.", True, False)
     # Gerçek hatırlatıcı → hem sesli hem yazı
     if t.startswith("Cronjob Response:"):
-        return (_format_cron_message(t), True, True)
+        _, body = _parse_cron(t)
+        return (f"Hatırlatma: {body}" if body else "Bir hatırlatman var.", False, True)
     # Tool-seçim promptu footer'ı Türkçeleştir → normal (hem sesli hem yazı)
     t2 = t.replace(
         "Reply with the number, the option text, or your own answer.",
@@ -499,6 +508,16 @@ class MateVoiceAdapter(BasePlatformAdapter):
             f"Bu arada, mate_voice için bir güncelleme var, sürüm {version}. "
             "Yüklememi istersen 'güncelle' de ya da karttan onayla."
         )
+
+    async def _publish_reminder(self, title: str, body: str) -> None:
+        if self._room is None:
+            return
+        import uuid
+        payload = json.dumps({"id": uuid.uuid4().hex[:12], "title": title, "body": body})
+        try:
+            await self._room.local_participant.send_text(payload, topic="mate.reminder")
+        except Exception as e:
+            log.warning("mate_voice: mate.reminder publish hatası: %s", e)
 
     async def _auto_restart_for_update(self) -> None:
         """Disk'te daha yeni sürüm var ama çalışan kod eski → SIGUSR1 ile aktive et."""
@@ -1551,6 +1570,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if not content or not content.strip():
             self._set_agent_state("idle")
             return SendResult(success=True, message_id="empty")
+        # Cron hatırlatıcısı → tıklanabilir kart (mate.reminder). Transkript yok
+        # (_classify show=False yapar), sesli duyurulur.
+        if content.strip().startswith("Cronjob Response:"):
+            r_title, r_body = _parse_cron(content)
+            asyncio.create_task(self._publish_reminder(r_title, r_body))
         # Sistem mesajı sınıflandır: (içerik, göster, seslendir). None → tamamen atla.
         content, do_show, do_speak = _classify_system_message(content)
         if content is None or not content.strip():
