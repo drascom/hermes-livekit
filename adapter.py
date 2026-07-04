@@ -129,6 +129,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._pub_track_sid = None   # our published track sid (transcript attribution)
         self._tts_task: Optional[asyncio.Task] = None  # in-flight TTS (barge-in cancels)
         self._active_turn_speaker_id: Optional[int] = None
+        # Katılımcı-kimliği → (speaker_id, name) son TANINAN sesli konuşmacı.
+        # Yazılı giriş (ses örneği yok → speaker-ID yok) bu haritayla aynı
+        # kullanıcı oturumuna yönlendirilir; aksi halde guest oturumuna düşüp
+        # sesli geçmişten kopuyordu (yazdığın URL'yi ajan bulamıyordu).
+        self._last_speaker_by_participant: Dict[str, tuple] = {}
         self._tts_target_speaker_id: Optional[int] = None
         self._consume_tasks: Dict[str, asyncio.Task] = {}  # per-participant track consumers
         self._attr_cache: Dict[str, dict] = {}
@@ -1125,8 +1130,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if not text:
             return
         ident = getattr(participant, "identity", None)
-        log.info("mate_voice: yazılı giriş %r (%s)", text[:80], ident)
-        await self._dispatch_turn(text, None, None, participant, None)
+        last = self._last_speaker_by_participant.get(ident) if ident else None
+        sid, sname = last if last else (None, None)
+        log.info("mate_voice: yazılı giriş %r (%s) → speaker_id=%s", text[:80], ident, sid)
+        await self._dispatch_turn(text, sname, sid, participant, None)
 
     async def _dispatch_turn(self, text, speaker, speaker_id, participant, track) -> None:
         """Bir turu Hermes'e ver: aktif-konuşmacı UI + kullanıcı transkripti +
@@ -1135,6 +1142,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # bir DİREKTİF geçeriz (ismiyle, doğal, her sefer farklı; hafızadaki
         # selamlama tercihine uy), selamın metnini AGENT üretir. Direktif sadece
         # Hermes'e gider; transkript UI'ına temiz kullanıcı metni yayınlanır.
+        if speaker_id is not None:
+            ident0 = getattr(participant, "identity", None)
+            if ident0:
+                self._last_speaker_by_participant[ident0] = (speaker_id, speaker)
         hermes_text = text
         if speaker_id is not None and speaker_id not in self._greeted_speakers:
             self._greeted_speakers.add(speaker_id)
