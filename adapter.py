@@ -128,6 +128,8 @@ def _classify_system_message(text: str):
         return (random.choice(_BUSY_ACK_REPLIES), False, True)
     if "Steered into current run" in t:
         return ("Tamam, onu da işime kattım.", False, True)
+    if "Queued for the next turn" in t or "Queued for next turn" in t:
+        return ("Tamam, sıraya aldım; birazdan ona da bakacağım.", False, True)
     # Sistem/durum → kısa yazı göster, seslendirme
     if "No active task to stop" in t:
         return ("Şu an duracak bir iş yok.", True, False)
@@ -164,7 +166,9 @@ STT_WIDTH = 2
 STT_CHANNELS = 1
 PUB_RATE = 48000
 PUB_CHANNELS = 1
-UPDATE_CHECK_INTERVAL_S = 5 * 60  # test: sık kontrol (otomatik deploy'u gözlemek için)
+UPDATE_CHECK_INTERVAL_S = 5 * 60  # uzak sürüm kontrolü (teklif) — ağ ister
+LOCAL_VERSION_WATCH_S = 20        # hızlı YEREL disk-sürüm nöbeti (ağsız) — LLM/elle
+                                  # 'hermes plugins update' sonrası hızlı auto-restart
 
 MERGE_SETTLE_S = 3.0   # utterance bitince birleştirme için bekleme (son cümleden sonra)
 
@@ -248,6 +252,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # ise _apply_update tetiklenir, değilse teklif düşer ve söz normal
         # akışa gider (kullanıcının asıl isteği kaybolmaz).
         self._update_check_task: Optional[asyncio.Task] = None
+        self._local_watch_task: Optional[asyncio.Task] = None
         self._pending_update_version: Optional[str] = None
         self._update_offer_announced = False
         self._auto_restart_triggered = False
@@ -447,6 +452,24 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._update_check_task is not None:
             return
         self._update_check_task = asyncio.create_task(self._update_check_loop())
+        if self._local_watch_task is None:
+            self._local_watch_task = asyncio.create_task(self._local_version_watch())
+
+    async def _local_version_watch(self) -> None:
+        """Hızlı YEREL sürüm nöbeti (ağsız): disk sürümü çalışandan yeniyse —
+        güncellemeyi kim uygularsa (LLM ajanı / elle `hermes plugins update` /
+        plugin akışı) uygulasın — ~20sn içinde otomatik SIGUSR1 restart. Uzak
+        kontrol (5dk) yerine hızlı toparlanma sağlar."""
+        while self._want_connected:
+            await asyncio.sleep(LOCAL_VERSION_WATCH_S)
+            if not self._want_connected or self._pending_update_version:
+                continue
+            if (not self._auto_restart_triggered and RUNNING_VERSION != "0"
+                    and is_newer(installed_version(), RUNNING_VERSION)):
+                self._auto_restart_triggered = True
+                log.info("mate_voice: [watch] disk %s > çalışan %s → hızlı restart",
+                         installed_version(), RUNNING_VERSION)
+                asyncio.create_task(self._auto_restart_for_update())
 
     async def _update_check_loop(self) -> None:
         """Periyodik versiyon kontrolü. Sadece bayrağı set eder — duyuru,
@@ -911,6 +934,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._update_check_task:
             self._update_check_task.cancel()
             self._update_check_task = None
+        if self._local_watch_task:
+            self._local_watch_task.cancel()
+            self._local_watch_task = None
         if self._reconnect_task:
             self._reconnect_task.cancel()
             self._reconnect_task = None
