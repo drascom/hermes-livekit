@@ -95,6 +95,49 @@ def _localize_busy_ack(text: str) -> str:
         return random.choice(_BUSY_ACK_REPLIES)
     return text
 
+def _format_cron_message(t: str) -> str:
+    body = t
+    parts = re.split(r"-{3,}", t, maxsplit=1)
+    if len(parts) > 1:
+        body = parts[1]
+    idx = body.find("To stop or manage")
+    if idx != -1:
+        body = body[:idx]
+    body = body.strip()
+    return f"⏰ Hatırlatma: {body}" if body else "⏰ Bir hatırlatman var."
+
+def _classify_system_message(text: str):
+    """(içerik|None, göster: bool, seslendir: bool) döndürür.
+    None → mesaj tamamen atlanır. Normal ajan cevabı → (text, True, True)."""
+    if not text or not text.strip():
+        return (text, True, True)
+    t = text.strip()
+    # İç gürültü → hiç
+    if t.startswith("💾") or "Self-improvement review" in t:
+        return (None, False, False)
+    # Konuşma ack'i → sesli söyle, yazma
+    if any(m in t for m in _BUSY_ACK_MARKERS):
+        return (random.choice(_BUSY_ACK_REPLIES), False, True)
+    if "Steered into current run" in t:
+        return ("Tamam, onu da işime kattım.", False, True)
+    # Sistem/durum → kısa yazı göster, seslendirme
+    if "No active task to stop" in t:
+        return ("Şu an duracak bir iş yok.", True, False)
+    if "Gateway restarting" in t:
+        return ("↻ Yeniden başlıyorum, birazdan döneceğim.", True, False)
+    if "Gateway online" in t or "Hermes is back" in t:
+        return ("✓ Tekrar buradayım.", True, False)
+    if "Gateway shutting down" in t:
+        return ("↻ Kapanıyorum, kısa süre bölüyorum.", True, False)
+    # Gerçek hatırlatıcı → hem sesli hem yazı
+    if t.startswith("Cronjob Response:"):
+        return (_format_cron_message(t), True, True)
+    # Tool-seçim promptu footer'ı Türkçeleştir → normal (hem sesli hem yazı)
+    t2 = t.replace(
+        "Reply with the number, the option text, or your own answer.",
+        "İstersen numarasını ya da seçeneği söyle.")
+    return (t2, True, True)
+
 # --- Endpointing / audio constants (1:1 with livekit_agent.py) ---
 SILENCE_RMS = 700
 SILENCE_AFTER_S = 1.0
@@ -1508,21 +1551,24 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if not content or not content.strip():
             self._set_agent_state("idle")
             return SendResult(success=True, message_id="empty")
-        # Core busy-ack (İngilizce) → Türkçe kısa cümle; TTS + transkript ikisi de.
-        content = _localize_busy_ack(content)
-        # Shutdown sırasında (SIGUSR1 self-restart) LiveKit bağlantısı kapanıyor;
-        # TTS'i beklemek notify_active_sessions fazını ~42sn asıyor. Transkripti
-        # yayınla (client "Gateway restarting" mesajını görsün) ama TTS'i BEKLEME.
+        # Sistem mesajı sınıflandır: (içerik, göster, seslendir). None → tamamen atla.
+        content, do_show, do_speak = _classify_system_message(content)
+        if content is None or not content.strip():
+            self._set_agent_state("idle")
+            return SendResult(success=True, message_id="suppressed")
+        # Shutdown (SIGUSR1 self-restart): LiveKit kapanıyor, TTS'i BEKLEME (asma fix)
+        # → yalnız transkript. (do_speak zaten kapatılır.)
         if self._shutting_down:
+            do_speak = False
+        # Transkript (yalnız göster=True).
+        if do_show:
             asyncio.create_task(
                 self._publish_text(content, track_sid=self._pub_track_sid, role="assistant")
             )
+        # Seslendirme yok → burada bitir (sistem/durum = yalnız yazı).
+        if not do_speak:
             self._set_agent_state("idle")
-            return SendResult(success=True, message_id="shutting_down")
-        # Assistant transcript line (best-effort, parallel).
-        asyncio.create_task(
-            self._publish_text(content, track_sid=self._pub_track_sid, role="assistant")
-        )
+            return SendResult(success=True, message_id="text_only")
         # TTS as a cancellable task so the next utterance can barge-in.
         voice = None  # per-client voice attr could be threaded via metadata later
         prev_tts_target = self._tts_target_speaker_id
