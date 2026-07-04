@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -42,9 +43,12 @@ _PRESERVE_PATTERNS = (
 )
 _PRESERVE_EXCLUDE_NAMES = {".env.example"}
 
+# TAM KELİME eşleşir (substring DEĞİL): "ok" eskiden "çok/yok"u yakalayıp
+# güncellemeyi yanlışlıkla onaylıyordu. Ambigü kısa filler'lar ("ok/okay/tamam")
+# çıkarıldı — teklif zaten "'güncelle' de" diyor, net onay bekleriz.
 _AFFIRMATIVE_WORDS = {
-    "evet", "güncelle", "guncelle", "yükle", "yukle", "tamam", "olur",
-    "yes", "update", "ok", "okay",
+    "evet", "güncelle", "guncelle", "yükle", "yukle", "olur",
+    "onayla", "yes", "update",
 }
 _CLI_YES = {"e", "evet", "y", "yes"}
 _CLI_NO = {"h", "hayır", "hayir", "n", "no"}
@@ -78,8 +82,9 @@ def is_newer(remote: str, local: str) -> bool:
 
 
 def is_affirmative_reply(text: str) -> bool:
-    lowered = text.casefold()
-    return any(word in lowered for word in _AFFIRMATIVE_WORDS)
+    # TAM KELİME eşleşmesi (substring değil) → "çok/yok" gibi sözler onaylamaz.
+    words = set(re.findall(r"[a-zçğıöşü0-9]+", text.casefold()))
+    return bool(words & _AFFIRMATIVE_WORDS)
 
 
 def _fetch_remote_version_sync() -> Optional[str]:
