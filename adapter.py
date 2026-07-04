@@ -166,7 +166,7 @@ PUB_RATE = 48000
 PUB_CHANNELS = 1
 UPDATE_CHECK_INTERVAL_S = 5 * 60  # test: sık kontrol (otomatik deploy'u gözlemek için)
 
-MERGE_SETTLE_S = 1.5   # utterance bitince birleştirme için bekleme (son cümleden sonra)
+MERGE_SETTLE_S = 3.0   # utterance bitince birleştirme için bekleme (son cümleden sonra)
 
 # Net Türkçe durdurma komutları — kısa (≤3 kelime) söz TAMAMEN bunlarsa çalışan
 # turu durdurur (uzun cümle içinde "dur" geçmesi tetiklemez → yanlış-pozitif önle).

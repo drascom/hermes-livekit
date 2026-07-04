@@ -205,8 +205,11 @@ class _Settings:
         self.turn_detector_enabled = _b("TURN_DETECTOR_ENABLED", True)
         self.turn_detector_repo = _s("TURN_DETECTOR_REPO", "pipecat-ai/smart-turn-v3")
         self.turn_detector_file = _s("TURN_DETECTOR_FILE", "smart-turn-v3.2-cpu.onnx")
-        self.turn_detector_threshold = _f("TURN_DETECTOR_THRESHOLD", 0.5)
-        self.turn_min_endpointing_delay = _f("TURN_MIN_ENDPOINTING_DELAY", 1.6)
+        # Threshold 0.5→0.65: cümle-ortası duraksamayı "tamam" sayıp kullanıcıyı
+        # KESMESİN (p 0.5-0.65 arası artık "devam"). min_endpointing 1.6→2.2:
+        # EOU kontrolünden önce daha uzun sessizlik bekle → akıcı cümle bölünmesin.
+        self.turn_detector_threshold = _f("TURN_DETECTOR_THRESHOLD", 0.65)
+        self.turn_min_endpointing_delay = _f("TURN_MIN_ENDPOINTING_DELAY", 2.2)
         self.turn_max_endpointing_delay = _f("TURN_MAX_ENDPOINTING_DELAY", 6.0)
         self.turn_recheck_interval = _f("TURN_RECHECK_INTERVAL", 0.4)
 
