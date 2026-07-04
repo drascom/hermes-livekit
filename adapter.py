@@ -910,6 +910,20 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 log.info("mate_voice: güncelleme karttan ertelendi (%s)", action)
             return json.dumps({"ok": True, "action": action})
 
+        async def _rpc_interrupt(data: "rtc.RpcInvocationData") -> str:
+            """Client 'Durdur' butonu — sesli '/stop' komutuyla AYNI seam (RPC-hizalama
+            Faz 4): native tui_gateway `session.interrupt` bu ses turu için no-op olurdu
+            (gateway/run.py, :8830, AYRI süreç — tui_gateway'in in-memory oturum kaydında
+            bu tur hiç yok). Bunun yerine son tanınan konuşmacının oturumuna sentetik
+            '/stop' turu gönderir — _is_stop_command ile birebir aynı yol."""
+            ident = data.caller_identity
+            participant = room.remote_participants.get(ident) if ident else None
+            last = self._last_speaker_by_participant.get(ident) if ident else None
+            sid_s, sname_s = last if last else (None, None)
+            log.info("mate_voice: mate.interrupt (%s) → /stop (speaker_id=%s)", ident, sid_s)
+            asyncio.create_task(self._dispatch_turn("/stop", sname_s, sid_s, participant, None))
+            return json.dumps({"ok": True})
+
         try:
             room.local_participant.register_rpc_method("mate.hello", _rpc_hello)
             room.local_participant.register_rpc_method("mate.set_awake", _rpc_set_awake)
@@ -917,6 +931,8 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 "mate.approval.resolve", _rpc_approval_resolve)
             room.local_participant.register_rpc_method(
                 "mate.update.resolve", _rpc_update_resolve)
+            room.local_participant.register_rpc_method(
+                "mate.interrupt", _rpc_interrupt)
         except Exception as e:
             log.warning("mate_voice: RPC kayıt atlandı (%r)", e)
 
