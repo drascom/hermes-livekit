@@ -883,7 +883,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
             if pa and (not aid or pa["id"] == aid):
                 self._pending_approval = None
                 try:
-                    resolve_gateway_approval(pa["session_key"], choice)
+                    # "Her zaman izin ver" (always/Sürekli) — sadece en eskiyi değil,
+                    # o an sırada bekleyen TÜM onayları tek seferde çözer (resolve_all).
+                    resolve_gateway_approval(pa["session_key"], choice, resolve_all=(choice == "always"))
                 except Exception as e:
                     log.warning("mate_voice: approval RPC resolve hatası: %s", e)
                 asyncio.create_task(self._close_approval(pa["id"]))
@@ -1202,7 +1204,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
             if choice is not None:
                 self._pending_approval = None
                 try:
-                    resolve_gateway_approval(pa["session_key"], choice)
+                    # bkz. _rpc_approval_resolve: "always" (her zaman izin ver) →
+                    # o an bekleyen tüm onayları tek seferde çözer (resolve_all).
+                    resolve_gateway_approval(pa["session_key"], choice, resolve_all=(choice == "always"))
                 except Exception as e:
                     log.warning("mate_voice: approval resolve hatası: %s", e)
                 asyncio.create_task(self._close_approval(pa["id"]))
