@@ -123,6 +123,15 @@ def _classify_system_message(text: str):
     # İç gürültü → hiç
     if t.startswith("💾") or "Self-improvement review" in t:
         return (None, False, False)
+    # Model retry ara-mesajları → tamamen gizle (ne yazı ne ses)
+    if re.search(r"\bretry(?:ing)?\b.*\(\d+\s*/\s*\d+\)", t, re.IGNORECASE):
+        return (None, False, False)
+    # Model boş-yanıt finali → kısa Türkçe, sesli + yazısız
+    # (gateway 3 retry sonrası final_response="(empty)" da gönderebiliyor)
+    if (t == "(empty)" or "Empty response from model" in t
+            or "Model returned no content" in t
+            or ("No reply" in t and len(t) < 80)):
+        return ("Modelden yanıt alamadım, tekrar dener misin?", False, True)
     # Konuşma ack'i → sesli söyle, yazma
     if any(m in t for m in _BUSY_ACK_MARKERS):
         return (random.choice(_BUSY_ACK_REPLIES), False, True)
@@ -190,6 +199,20 @@ def _is_stop_command(text: str) -> bool:
     return low in _STOP_PHRASES or words[0] in _STOP_LEAD
 
 
+# Açık enrollment komutları — SADECE bunlar enroll başlatır (oto-enroll yok).
+# Kısa (≤6 kelime) sözde geçmeli; uzun cümle içinde tesadüfi geçiş tetiklemez.
+_ENROLL_PHRASES = (
+    "beni kaydet", "beni tanı", "sesimi kaydet", "sesimi öğren",
+    "beni öğren", "beni hatırla", "sesimi tanı",
+    "enroll me", "remember me", "register me", "remember my voice",
+)
+def _is_enroll_command(text: str) -> bool:
+    low = re.sub(r"\s+", " ", (text or "").casefold()).strip().rstrip(".!?")
+    if not low or len(low.split()) > 6:
+        return False
+    return any(p in low for p in _ENROLL_PHRASES)
+
+
 class MateVoiceAdapter(BasePlatformAdapter):
     """LiveKit voice adapter. Instantiated by the adapter_factory in register()."""
 
@@ -219,10 +242,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._tts_target_speaker_id: Optional[int] = None
         self._consume_tasks: Dict[str, asyncio.Task] = {}  # per-participant track consumers
         self._attr_cache: Dict[str, dict] = {}
-        # Recognize-first oto-enrollment durumu: bilinmeyen ses asistana hitap
-        # edince ORİJİNAL istek BEKLETİLİR ({text, emb}), isim sorulur; sonraki
-        # utterance isim olur → enroll + bekletilen istek tanınan kullanıcı olarak
-        # işlenir. None = enrollment akışında değiliz.
+        # Açık-komut enrollment durumu ("beni kaydet"): {emb, stage, name?,
+        # name_emb?}. stage: ask_name → confirm. Oto-enroll YOK; bilinmeyen ses
+        # sessizce guest. None = enrollment akışında değiliz.
         self._pending_enroll: Optional[dict] = None
         # Bu bağlantıda zaten "hoş geldin" denmiş speaker_id'ler (bir kez selam).
         # Her connect/reconnect'te sıfırlanır → tekrar bağlanınca yine karşılar.
@@ -1201,6 +1223,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
             return
 
         if _is_stop_command(text):
+            if self._pending_enroll is not None:
+                self._pending_enroll = None
+                log.info("mate_voice: enrollment iptal (stop komutu %r)", text[:40])
+                en = self._is_en(self._attrs(participant).get("language"))
+                await self._enroll_say(
+                    "Okay, cancelled." if en else "Tamam, vazgeçtim.", participant)
+                self._set_agent_state("idle")
+                return
             ident_s = getattr(participant, "identity", None)
             self._cancel_pending(ident_s)          # bekleyen birleştirmeyi at
             # /stop DOĞRU oturuma gitmeli: çalışan tur son tanınan konuşmacının
@@ -1228,23 +1258,23 @@ class MateVoiceAdapter(BasePlatformAdapter):
         speaker, emb = await self._identify(pcm)
         speaker_id = self.speaker.id_for(speaker) if (self.speaker and speaker) else None
 
-        # Recognize-first oto-enrollment: speaker-ID + store AÇIK ve ses TANINMADI.
-        # Bilinmeyen ses → isim sor (1. tur), isim utterance'ı → enroll + bekletilen
-        # isteği işle (2. tur). Tanınan ses bu daldan geçmez → normal dispatch.
-        if self.speaker is not None and self.speaker_store is not None and speaker_id is None:
+        # Enrollment SADECE açık komutla ("beni kaydet/tanı" vb.). Oto-enroll
+        # KALDIRILDI: ortak cihazda rastgele söz isim oluyordu → çöp konuşmacı
+        # kayıtları. Bilinmeyen ses artık SESSİZCE guest (isim sorulmaz).
+        if self.speaker is not None and self.speaker_store is not None:
             if self._pending_enroll is not None:
-                # Enroll ortasında: isim yanıtı (kısa olabilir) → tamamla.
-                await self._complete_enrollment(text, emb, participant, track)
+                # Enroll akışı ortasında: isim / onay yanıtı (kısa olabilir).
+                await self._continue_enrollment(text, emb, participant)
                 return
-            # Bilinmeyen + enroll ortasında değil: isim sormayı SADECE yeterince
-            # uzun söz için başlat (kısa 1-2 kelime → çöp isim riski). Kısa söz →
-            # isim sorma, guest olarak devam.
-            dur_s = len(pcm) / (STT_RATE * STT_WIDTH * STT_CHANNELS)
-            if dur_s >= self.settings.speaker_enroll_min_seconds:
+            if _is_enroll_command(text):
+                if speaker_id is not None:
+                    en = self._is_en(self._attrs(participant).get("language"))
+                    msg = (f"I already know you, {speaker}." if en
+                           else f"Seni zaten tanıyorum, {speaker}.")
+                    await self._enroll_say(msg, participant)
+                    return
                 await self._begin_enrollment(text, emb, participant)
                 return
-            log.info("mate_voice: kısa söz (%.1fs < %.1fs), enroll atlandı → guest",
-                     dur_s, self.settings.speaker_enroll_min_seconds)
         self._enqueue_turn(text, speaker, speaker_id, participant, track)
 
     async def _handle_text_input(self, reader, participant) -> None:
@@ -1470,7 +1500,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         except Exception:
             return 0.0
 
-    # ── Recognize-first oto-enrollment ─────────────────────────────────────
+    # ── Açık-komut enrollment ("beni kaydet" → isim → onay) ─────────────────
 
     @staticmethod
     def _is_en(language) -> bool:
@@ -1512,59 +1542,65 @@ class MateVoiceAdapter(BasePlatformAdapter):
         await self._speak(text, self._attrs(participant).get("voice") or None)
 
     async def _begin_enrollment(self, text, emb, participant) -> None:
-        """1. TUR: bilinmeyen ses → içeriğe cevap verme, sadece ismi sor.
-
-        İlk cümle yalnız ses örneği olarak tutulur. Kimlik tamamlandıktan sonra
-        eski cümleyi otomatik cevaplamayız; kullanıcıdan tekrar sormasını isteriz.
-        """
-        self._pending_enroll = {"text": text, "emb": emb, "ignore_first_residue": True}
+        """1. TUR: açık komut ("beni kaydet") → ismi sor. emb = komut sözünün
+        ses örneği; onaylanırsa örnek olarak yazılır."""
+        self._pending_enroll = {"emb": emb, "stage": "ask_name"}
         en = self._is_en(self._attrs(participant).get("language"))
-        ask = "I don't recognize you. What's your name?" if en else "Seni tanımıyorum, adın ne?"
-        log.info("mate_voice: enrollment — bilinmeyen ses, isim soruluyor (ignored=%r)", text[:40])
+        ask = "Okay, what's your name?" if en else "Tamam, adın ne?"
+        log.info("mate_voice: enrollment (açık komut %r) — isim soruluyor", text[:40])
         self._publish_speaker(None, None, guest=True)
         await self._enroll_say(ask, participant)
 
-    async def _complete_enrollment(self, name_text, name_emb, participant, track) -> None:
-        """2. TUR: isim utterance'ı → kişi oluştur + örnek(ler) ekle + reload, sonra
-        kullanıcıdan isteğini tekrar etmesini iste.
+    async def _continue_enrollment(self, text, emb, participant) -> None:
+        """2.–3. TUR: isim → "X olarak kaydedeyim mi?" onayı → evetse kaydet.
 
-        Fail-closed: unknown kişi içerik cevabı alamaz; isim ayrıştırılamaz veya DB
-        yazılamazsa bekletilen ilk cümle Hermes'e gönderilmez.
-        """
-        pend = self._pending_enroll or {"text": "", "emb": None}
+        Fail-closed: onay 'evet' olmadıkça DB'ye HİÇBİR ŞEY yazılmaz; onay
+        dışı her yanıt akışı iptal eder."""
+        pend = self._pending_enroll or {}
         en = self._is_en(self._attrs(participant).get("language"))
-        name = self._parse_name(name_text)
-        if not name:
-            words = [w for w in re.split(r"\s+", (name_text or "").strip()) if w]
-            if pend.pop("ignore_first_residue", False) and len(words) > 3:
-                log.info(
-                    "mate_voice: enrollment — isim sorusu öncesi artık söz yok sayıldı (%r)",
-                    name_text[:40],
-                )
+        if pend.get("stage") == "confirm":
+            if is_affirmative_reply(text):
+                await self._finish_enrollment(participant)
                 return
-            log.info("mate_voice: enrollment — isim ayrıştırılamadı (%r), tekrar soruluyor", name_text[:40])
-            retry = "I didn't catch your name. Can you say it again?" if en else "Adını anlayamadım, tekrar söyler misin?"
+            self._pending_enroll = None
+            log.info("mate_voice: enrollment onaylanmadı (%r) → iptal", text[:40])
+            await self._enroll_say(
+                "Okay, I didn't save it." if en else "Tamam, kaydetmedim.", participant)
+            return
+        name = self._parse_name(text)
+        if not name:
+            log.info("mate_voice: enrollment — isim ayrıştırılamadı (%r), tekrar soruluyor", text[:40])
+            retry = ("I didn't catch your name. Can you say it again?"
+                     if en else "Adını anlayamadım, tekrar söyler misin?")
             await self._enroll_say(retry, participant)
             return
+        pend.update({"stage": "confirm", "name": name, "name_emb": emb})
+        self._pending_enroll = pend
+        ask = (f"Should I save you as {name}?" if en
+               else f"Seni {name} olarak kaydedeyim mi?")
+        await self._enroll_say(ask, participant)
+
+    async def _finish_enrollment(self, participant) -> None:
+        """Onay alındı → kişi oluştur + ses örneklerini yaz + reload."""
+        pend = self._pending_enroll or {}
+        name = pend.get("name") or ""
+        en = self._is_en(self._attrs(participant).get("language"))
         try:
             from .voice.speaker import emb_to_bytes
 
             rec = await self.speaker_store.create_speaker(name)
             sid = rec["id"]
             mid, dim = self.speaker.model_id, self.speaker.dim
-            if pend.get("emb") is not None:
-                await self.speaker_store.add_speaker_sample(
-                    sid, emb_to_bytes(pend["emb"]), dim, mid, source="auto-enroll"
-                )
-            if name_emb is not None:
-                await self.speaker_store.add_speaker_sample(
-                    sid, emb_to_bytes(name_emb), dim, mid, source="auto-enroll"
-                )
+            for key in ("emb", "name_emb"):
+                if pend.get(key) is not None:
+                    await self.speaker_store.add_speaker_sample(
+                        sid, emb_to_bytes(pend[key]), dim, mid, source="explicit-enroll"
+                    )
             await self._load_speakers()
             log.info("mate_voice: enrollment — %r kaydedildi (id=%s)", name, sid)
         except Exception as e:
             self._pending_enroll = None
-            log.warning("mate_voice: enrollment başarısız (%s) → içerik cevabı verilmedi", e)
+            log.warning("mate_voice: enrollment başarısız (%s)", e)
             fail = (
                 "I couldn't save your voice right now. Please try again later."
                 if en else "Şu anda seni kaydedemedim. Lütfen biraz sonra tekrar dene."
@@ -1573,8 +1609,8 @@ class MateVoiceAdapter(BasePlatformAdapter):
             return
         self._pending_enroll = None
         greet = (
-            f"Okay {name}, I know you now. What did you want to ask?"
-            if en else f"Tamam {name}, seni tanıdım. Ne sormak istemiştin?"
+            f"Okay {name}, I know you now."
+            if en else f"Tamam {name}, artık seni tanıyorum."
         )
         self._publish_speaker(name, sid, guest=False)
         await self._enroll_say(greet, participant)
