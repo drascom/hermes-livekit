@@ -114,6 +114,25 @@ PUB_RATE = 48000
 PUB_CHANNELS = 1
 UPDATE_CHECK_INTERVAL_S = 5 * 60  # test: sık kontrol (otomatik deploy'u gözlemek için)
 
+MERGE_SETTLE_S = 1.5   # utterance bitince birleştirme için bekleme (son cümleden sonra)
+
+# Net Türkçe durdurma komutları — kısa (≤3 kelime) söz TAMAMEN bunlarsa çalışan
+# turu durdurur (uzun cümle içinde "dur" geçmesi tetiklemez → yanlış-pozitif önle).
+_STOP_PHRASES = {
+    "dur", "durdur", "dur bakalım", "dur yapma", "yapma dur", "bekle",
+    "bir dakika", "bir saniye", "bir dk", "stop", "iptal", "iptal et",
+    "boşver", "boş ver", "vazgeç", "sus",
+}
+_STOP_LEAD = {"dur", "durdur", "bekle", "stop", "iptal", "sus"}
+def _is_stop_command(text: str) -> bool:
+    low = (text or "").strip().lower().rstrip(".!?")
+    if not low:
+        return False
+    words = low.split()
+    if len(words) > 3:
+        return False
+    return low in _STOP_PHRASES or words[0] in _STOP_LEAD
+
 
 class MateVoiceAdapter(BasePlatformAdapter):
     """LiveKit voice adapter. Instantiated by the adapter_factory in register()."""
@@ -132,6 +151,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._pub_track_sid = None   # our published track sid (transcript attribution)
         self._tts_task: Optional[asyncio.Task] = None  # in-flight TTS (barge-in cancels)
         self._active_turn_speaker_id: Optional[int] = None
+        # Utterance coalescing: katılımcı-kimliği → bekleyen birleştirme tamponu.
+        # {"parts":[str], "speaker":.., "speaker_id":.., "participant":.., "track":..,
+        #  "timer": asyncio.Task}. Settle penceresi dolunca birleşik tek tur gönderilir.
+        self._pending_dispatch: Dict[str, dict] = {}
         # Katılımcı-kimliği → (speaker_id, name) son TANINAN sesli konuşmacı.
         # Yazılı giriş (ses örneği yok → speaker-ID yok) bu haritayla aynı
         # kullanıcı oturumuna yönlendirilir; aksi halde guest oturumuna düşüp
@@ -837,6 +860,8 @@ class MateVoiceAdapter(BasePlatformAdapter):
             self._tts_task = None
         # Gateway tool-onayı: bekleyen onayı temizle.
         self._pending_approval = None
+        for ident in list(self._pending_dispatch.keys()):
+            self._cancel_pending(ident)
         room, self._room, self._source = self._room, None, None
         if room is not None:
             try:
@@ -1087,6 +1112,19 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if not text:
             return
 
+        if _is_stop_command(text):
+            ident_s = getattr(participant, "identity", None)
+            self._cancel_pending(ident_s)          # bekleyen birleştirmeyi at
+            # /stop DOĞRU oturuma gitmeli: çalışan tur son tanınan konuşmacının
+            # per-user oturumunda (room:speaker_id). Kısa "dur" identify'i
+            # başarısız olabilir → son-konuşmacı haritasından hedefle (A-fix).
+            last_s = self._last_speaker_by_participant.get(ident_s) if ident_s else None
+            sid_s, sname_s = last_s if last_s else (None, None)
+            log.info("mate_voice: stop komutu %r → /stop (speaker_id=%s)", text[:40], sid_s)
+            await self._dispatch_turn("/stop", sname_s, sid_s, participant, track)
+            self._set_agent_state("idle")
+            return
+
         if self._pending_update_version and self._update_offer_announced:
             version = self._pending_update_version
             self._pending_update_version = None
@@ -1119,7 +1157,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 return
             log.info("mate_voice: kısa söz (%.1fs < %.1fs), enroll atlandı → guest",
                      dur_s, self.settings.speaker_enroll_min_seconds)
-        await self._dispatch_turn(text, speaker, speaker_id, participant, track)
+        self._enqueue_turn(text, speaker, speaker_id, participant, track)
 
     async def _handle_text_input(self, reader, participant) -> None:
         """Client'tan yazılı sohbet mesajı (topic 'lk.chat'). Sesli tur gibi
@@ -1138,6 +1176,50 @@ class MateVoiceAdapter(BasePlatformAdapter):
         log.info("mate_voice: yazılı giriş %r (%s) → speaker_id=%s", text[:80], ident, sid)
         await self._dispatch_turn(text, sname, sid, participant, None)
 
+    def _enqueue_turn(self, text, speaker, speaker_id, participant, track) -> None:
+        """Utterance'ı hemen dispatch etme; settle penceresinde biriktir. Aynı
+        konuşmacının ardışık cümleleri TEK tura birleşir (erken-kesme + 'her cümle
+        yeni iş' fix). Farklı konuşmacı gelirse bekleyeni hemen boşalt."""
+        ident = getattr(participant, "identity", None) or "guest"
+        pend = self._pending_dispatch.get(ident)
+        if pend is not None and pend["speaker_id"] != speaker_id:
+            self._flush_pending(ident)             # farklı kişi → öncekini gönder
+            pend = None
+        if pend is None:
+            pend = {"parts": [], "speaker": speaker, "speaker_id": speaker_id,
+                    "participant": participant, "track": track, "timer": None}
+            self._pending_dispatch[ident] = pend
+        pend["parts"].append(text)
+        pend["speaker"], pend["participant"], pend["track"] = speaker, participant, track
+        if pend["timer"] is not None:
+            pend["timer"].cancel()
+        pend["timer"] = asyncio.create_task(self._settle_and_flush(ident, MERGE_SETTLE_S))
+
+    async def _settle_and_flush(self, ident: str, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        self._flush_pending(ident)
+
+    def _flush_pending(self, ident: str) -> None:
+        pend = self._pending_dispatch.pop(ident, None)
+        if not pend or not pend["parts"]:
+            return
+        if pend["timer"] is not None:
+            pend["timer"].cancel()
+        merged = " ".join(p.strip() for p in pend["parts"] if p.strip())
+        if not merged:
+            return
+        asyncio.create_task(self._dispatch_turn(
+            merged, pend["speaker"], pend["speaker_id"],
+            pend["participant"], pend["track"]))
+
+    def _cancel_pending(self, ident) -> None:
+        pend = self._pending_dispatch.pop(ident, None)
+        if pend and pend["timer"] is not None:
+            pend["timer"].cancel()
+
     async def _dispatch_turn(self, text, speaker, speaker_id, participant, track) -> None:
         """Bir turu Hermes'e ver: aktif-konuşmacı UI + kullanıcı transkripti +
         MessageEvent → handle_message. (Asistan satırı send()'te yayınlanır.)"""
@@ -1149,14 +1231,16 @@ class MateVoiceAdapter(BasePlatformAdapter):
             ident0 = getattr(participant, "identity", None)
             if ident0:
                 self._last_speaker_by_participant[ident0] = (speaker_id, speaker)
+        is_cmd = text.startswith("/")
         hermes_text = text
-        if speaker_id is not None and speaker_id not in self._greeted_speakers:
+        if not is_cmd and speaker_id is not None and speaker_id not in self._greeted_speakers:
             self._greeted_speakers.add(speaker_id)
             en = self._is_en(self._attrs(participant).get("language"))
             hermes_text = self._greet_directive(speaker, en) + "\n\n" + text
         self._publish_speaker(speaker, speaker_id, guest=(speaker_id is None))
         human_track_sid = getattr(track, "sid", None)
-        asyncio.create_task(self._publish_text(text, track_sid=human_track_sid, role="user"))
+        if not is_cmd:
+            asyncio.create_task(self._publish_text(text, track_sid=human_track_sid, role="user"))
 
         # speaker-ID → session scope. Recognized → per-user; guest → DEVICE
         # scope (LiveKit participant identity). NOT None: Hermes authz
