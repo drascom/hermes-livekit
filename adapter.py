@@ -230,6 +230,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._pub_track_sid = None   # our published track sid (transcript attribution)
         self._tts_task: Optional[asyncio.Task] = None  # in-flight TTS (barge-in cancels)
         self._active_turn_speaker_id: Optional[int] = None
+        # Son turun Hermes persisted session_id'si (gateway/session.py SessionEntry.session_id).
+        # mate.hello ack'i ve mate.session topic'i bunu duyurur (RPC-hizalama Faz 0/1).
+        self._active_session_id: Optional[str] = None
         # Utterance coalescing: katılımcı-kimliği → bekleyen birleştirme tamponu.
         # {"parts":[str], "speaker":.., "speaker_id":.., "participant":.., "track":..,
         #  "timer": asyncio.Task}. Settle penceresi dolunca birleşik tek tur gönderilir.
@@ -846,7 +849,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
             except (ValueError, TypeError):
                 raise rtc.RpcError(code=400, message="bad payload")
             log.info("mate_voice: mate.hello (%s): %r", data.caller_identity, req)
-            return json.dumps({"ready": True, "agent": "candan", "proto": 1})
+            return json.dumps({
+                "ready": True, "agent": "candan", "proto": 1,
+                "session_id": self._active_session_id,
+            })
 
         async def _rpc_set_awake(data: "rtc.RpcInvocationData") -> str:
             try:
@@ -1386,6 +1392,18 @@ class MateVoiceAdapter(BasePlatformAdapter):
             user_id=user_id,
             user_name=user_name,
         )
+        # Persisted Hermes session_id'yi duyur (native RPC gateway'in session.list/
+        # session.resume'da gördüğü id — build_session_key/session_key İLE AYNI
+        # SessionEntry'de tutuluyor, get_or_create_session idempotent: yeni tur
+        # YARATMAZ, handle_message'ın az sonra kullanacağı entry'yi okur).
+        store = getattr(self, "_session_store", None)
+        if store is not None:
+            try:
+                entry = store.get_or_create_session(source)
+                self._active_session_id = entry.session_id
+                self._publish_session(entry.session_id, speaker_id, user_name)
+            except Exception as e:
+                log.warning("mate_voice: session_id duyurulamadı: %r", e)
         self._set_agent_state("thinking")
         prev_speaker_id = self._active_turn_speaker_id
         self._active_turn_speaker_id = speaker_id
@@ -1796,6 +1814,28 @@ class MateVoiceAdapter(BasePlatformAdapter):
         async def _send() -> None:
             try:
                 await room.local_participant.send_text(payload, topic="mate.speaker")
+            except Exception:
+                pass
+
+        try:
+            asyncio.create_task(_send())
+        except RuntimeError:
+            pass
+
+    def _publish_session(self, session_id: str, speaker_id, name) -> None:
+        room = self._room
+        if room is None:
+            return
+        import json
+
+        payload = json.dumps(
+            {"session_id": session_id, "speaker_id": speaker_id, "name": name},
+            ensure_ascii=False,
+        )
+
+        async def _send() -> None:
+            try:
+                await room.local_participant.send_text(payload, topic="mate.session")
             except Exception:
                 pass
 
