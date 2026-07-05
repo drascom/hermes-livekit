@@ -31,7 +31,7 @@ Client dışarıdan bağlanacaksa şu portları sağlayıcının güvenlik duvar
 (OCI security list / AWS SG / Hetzner FW / ufw) **açın**:
 - **7880/tcp** — LiveKit ws (sinyal)
 - **7881/tcp** — LiveKit RTC/TCP fallback
-- **50000–50200/udp** — LiveKit medya (WebRTC)
+- **7882/udp** — LiveKit medya (WebRTC, tek mux portu)
 - **8830/tcp** — mate_voice token/pairing endpoint'i
 - **8800/tcp** — Hermes gateway RPC (client oturum/araç kanalı; token korumalı)
 

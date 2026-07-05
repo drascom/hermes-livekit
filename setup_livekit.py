@@ -52,8 +52,8 @@ GH_TAG = "https://api.github.com/repos/livekit/livekit/releases/tags/{tag}"
 
 PORT_WS = 7880
 PORT_TCP = 7881
-UDP_START = 50000
-UDP_END = 50200
+PORT_UDP_MUX = 7882   # tek UDP mux portu — 50000-50200 aralığı yerine
+                      # (firewall'da TEK udp portu açmak yeter)
 
 
 # ---------------------------------------------------------------- helpers
@@ -137,8 +137,7 @@ def render_config(bind: str, ip: str, key: str, secret: str) -> str:
         f"{bind_lines}"
         "rtc:\n"
         f"  tcp_port: {PORT_TCP}\n"
-        f"  port_range_start: {UDP_START}\n"
-        f"  port_range_end: {UDP_END}\n"
+        f"  udp_port: {PORT_UDP_MUX}\n"
         f"  use_external_ip: {ext}\n"
         "keys:\n"
         f"  {key}: {secret}\n"
