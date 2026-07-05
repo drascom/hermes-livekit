@@ -67,8 +67,30 @@ def plugin_env(key: str, default: str = "") -> str:
     return default
 
 
-def public_base_url() -> str:
-    return plugin_env("MATE_PUBLIC_TOKEN_URL", "https://mate-token.drascom.uk").rstrip("/")
+def _primary_ip() -> str:
+    """Makinenin birincil (default-route) IPv4'ü; bulunamazsa ''."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 53))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        return ""
+
+
+def public_base_url(request_host: str = "") -> str:
+    """Token/pairing endpoint'inin client'a duyurulan adresi. Açık env yoksa
+    isteğin geldiği host'tan türetilir (kullanıcı hangi adresle ulaştıysa o);
+    CLI bağlamında (pair-qr, istek yok) makinenin birincil IP'sine düşülür."""
+    explicit = plugin_env("MATE_PUBLIC_TOKEN_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    port = plugin_env("MATE_VOICE_TOKEN_PORT", "8830")
+    host = request_host or _primary_ip() or "127.0.0.1"
+    return f"http://{host}:{port}"
 
 
 def read_gateway_token() -> str:
@@ -131,7 +153,7 @@ def build_config(settings, room: str, request_host: str = "") -> dict:
     return {
         "livekit_url": client_livekit_url(settings, request_host),
         "room": room,
-        "token_endpoint": public_base_url(),
+        "token_endpoint": public_base_url(request_host),
         "client_key": settings.client_key,
         "gateway_url": client_gateway_url(request_host),
         "gateway_token": read_gateway_token(),
