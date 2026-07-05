@@ -77,9 +77,12 @@ gibi). Aksi halde aynı ağdan / SSH tüneli ile erişilir:
 
 ## 6. "Başkası kendi Hermes'ine nasıl bağlar"
 1. `mate_voice` plugin'i `~/.hermes/plugins/`'e koy, `plugins.enabled`'a ekle.
-2. `.env`'e LiveKit + STT/TTS host'ları + `MATE_VOICE_CLIENT_KEY` yaz.
-3. Gateway'i başlat → ajan odaya bağlanır, token endpoint açılır.
-4. İstemci endpoint'ten token alıp yukarıdaki sözleşmeyle bağlanır. Brain'e gerek yok.
+2. LiveKit sunucun yoksa: `python3 setup_livekit.py --bind mesh --ip <mesh-ip>` —
+   binary+config+systemd+key üretir ve plugin `.env`'ine `LIVEKIT_URL/API_KEY/API_SECRET`
+   yazar (bkz. README "LiveKit sunucusunu plugin ile kurma"). Varsa bu adımı atla.
+3. `.env`'e LiveKit + STT/TTS host'ları + `MATE_VOICE_CLIENT_KEY` yaz.
+4. Gateway'i başlat → ajan odaya bağlanır, token endpoint açılır.
+5. İstemci endpoint'ten token alıp yukarıdaki sözleşmeyle bağlanır. Brain'e gerek yok.
 
 ## 7. Tek-URL pairing (v0.2.38+)
 Client tek adres girer: `https://mate-token.drascom.uk` (proxy → :8830 aiohttp).

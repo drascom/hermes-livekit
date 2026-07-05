@@ -24,6 +24,36 @@ onay verdiğinde kendini `hermes plugins update` ile günceller.
 `.env.example`'ı kopyalayıp `.env` yapın ve doldurun (LiveKit URL/secret, STT/TTS host'ları,
 oda, token sunucusu). Örnek host'lar generic'tir — kendi altyapınızla değiştirin.
 
+## LiveKit sunucusunu plugin ile kurma (opsiyonel)
+
+Elinizde çalışan bir LiveKit yoksa plugin'in setup script'i her şeyi kurar:
+binary indirir (GitHub releases, linux amd64/arm64/armv7), crypto-random API
+key/secret üretir, minimal `livekit.yaml` yazar, systemd unit'i kurup başlatır
+ve plugin `.env`'ini günceller (`LIVEKIT_URL/API_KEY/API_SECRET`) — pairing
+config paketi böylece otomatik doğru değerleri dağıtır.
+
+```bash
+# mesh (NetBird/Tailscale) kurulumu — önerilen; TLS gerekmez
+python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --bind mesh --ip 100.x.y.z
+
+# sadece localhost
+python3 ~/.hermes/plugins/mate_voice/setup_livekit.py
+
+# önce ne yapacağını gör
+python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --dry-run
+```
+
+Seçenekler: `--bind {loopback,mesh,public}`, `--ip`, `--prefix` (default
+`~/.hermes/mate_voice/livekit`), `--livekit-version vX.Y.Z`, `--no-systemd`,
+`--force`, `--dry-run`. **Idempotent:** mevcut binary/config/env değerlerine
+sormadan dokunmaz; `--force` ile ezilir. macOS'ta systemd yerine elle başlatma
+komutu basılır (binary için `brew install livekit`).
+
+**TLS/TURN notu:** `--bind public` seçerseniz tarayıcı/uzak client'lar için
+domain + sertifika (wss) ve NAT arkasında TURN şarttır — bunu script
+otomatikleştirmez; Caddy/nginx reverse proxy kurun. Mesh-only kurulumda
+(NetBird/Tailscale) TLS gerekmez, `ws://` yeterlidir.
+
 ## Bağımlı / ilişkili repolar
 
 Bu plugin tek başına çalışmaz; şu bileşenlere bağlıdır (aynı Mate/Candan sistemi):
