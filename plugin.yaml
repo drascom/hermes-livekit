@@ -1,7 +1,7 @@
 name: mate_voice
 label: LiveKit Voice
 kind: platform
-version: 0.2.39
+version: 0.2.40
 description: >
   LiveKit voice platform adapter for Hermes Agent. Carries the Mate voice
   stack (RMS endpointing, smart-turn v3 EOU, barge-in, wake-word gate,
@@ -12,18 +12,6 @@ description: >
   MessageEvent → Hermes brain; brain reply → send() → vox TTS published back.
 author: mate
 requires_env:
-  - name: LIVEKIT_URL
-    description: "LiveKit server URL the agent connects to (e.g. ws://127.0.0.1:7880)"
-    prompt: "LiveKit URL"
-    password: false
-  - name: LIVEKIT_API_KEY
-    description: "LiveKit API key for server-side JWT minting"
-    prompt: "LiveKit API key"
-    password: false
-  - name: LIVEKIT_API_SECRET
-    description: "LiveKit API secret for server-side JWT minting. Empty = adapter disabled."
-    prompt: "LiveKit API secret"
-    password: true
   - name: STT_HOST
     description: "Whisper STT host (Wyoming). e.g. 192.168.1.10"
     prompt: "STT host"
@@ -41,6 +29,20 @@ requires_env:
     prompt: "vox port"
     password: false
 optional_env:
+  # LIVEKIT_* kurulumda SORULMAZ: setup_livekit.py sihirbazı ("mevcut mu, yeni mi?")
+  # ya otomatik yazar (yeni kurulum) ya da ancak "mevcut var" denirse sorar.
+  - name: LIVEKIT_URL
+    description: "LiveKit server URL the agent connects to (e.g. ws://127.0.0.1:7880). Boşsa setup_livekit.py sihirbazını çalıştır."
+    prompt: "LiveKit URL"
+    password: false
+  - name: LIVEKIT_API_KEY
+    description: "LiveKit API key for server-side JWT minting"
+    prompt: "LiveKit API key"
+    password: false
+  - name: LIVEKIT_API_SECRET
+    description: "LiveKit API secret for server-side JWT minting. Empty = adapter disabled."
+    prompt: "LiveKit API secret"
+    password: true
   - name: MATE_VOICE_CLIENT_KEY
     description: "İstemcilerin X-Mate-Key'i. BOŞ bırak → ilk gateway başlatmasında otomatik üretilir, .env'e yazılır, konsolda QR+metin gösterilir."
     prompt: "Client shared key (boş bırak = otomatik üret)"

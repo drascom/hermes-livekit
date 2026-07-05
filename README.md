@@ -33,11 +33,15 @@ ve plugin `.env`'ini günceller (`LIVEKIT_URL/API_KEY/API_SECRET`) — pairing
 config paketi böylece otomatik doğru değerleri dağıtır.
 
 ```bash
-# mesh (NetBird/Tailscale) kurulumu — önerilen; TLS gerekmez
+# SİHİRBAZ (önerilen) — "mevcut LiveKit var mı, yeni kurayım mı?" diye sorar;
+# yeni kurulumda mesh IP'yi (wt0) otomatik bulur, key/secret otomatik yazılır
+python3 ~/.hermes/plugins/mate_voice/setup_livekit.py
+
+# non-interaktif: mesh (NetBird/Tailscale) kurulumu — TLS gerekmez
 python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --bind mesh --ip 100.x.y.z
 
-# sadece localhost
-python3 ~/.hermes/plugins/mate_voice/setup_livekit.py
+# non-interaktif: sadece localhost
+python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --bind loopback
 
 # önce ne yapacağını gör
 python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --dry-run

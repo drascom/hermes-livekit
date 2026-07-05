@@ -11,6 +11,12 @@ Mate Voice, Hermes'e LiveKit üzerinden **canlı sesli asistan** ekler: konuş, 
 - `MATE_VOICE_CLIENT_KEY` — istemcinin `X-Mate-Key`'i (boş bırakılırsa ilk başlatmada otomatik üretilir)
 
 ## Son adım
+0. **LiveKit ayarı (ilk kurulum):**
+   ```
+   python3 ~/.hermes/plugins/mate_voice/setup_livekit.py
+   ```
+   Sihirbaz sorar: *mevcut LiveKit sunucun var mı, yoksa yeni kurayım mı?*
+   Yeni kurulumda URL/key/secret otomatik üretilip `.env`'e yazılır (hiç sorulmaz).
 1. Gateway'i yeniden başlat:
    ```
    hermes gateway restart

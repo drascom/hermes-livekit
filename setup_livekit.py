@@ -8,6 +8,11 @@ YAZMAZ (--force ile ezilir).
 Kullanım (sunucuda):
     python3 ~/.hermes/plugins/mate_voice/setup_livekit.py [seçenekler]
 
+Argümansız (veya --wizard ile) çalıştırılınca İNTERAKTİF SİHİRBAZ açılır:
+"Mevcut bir LiveKit sunucun var mı, yoksa yeni kurayım mı?" — "yeni kur" ise
+URL/key/secret OTOMATİK üretilip .env'e yazılır (hiç sorulmaz); "mevcut var"
+ise ancak o zaman URL/key/secret sorulur.
+
 Seçenekler:
     --bind {loopback,mesh,public}  Dinleme kapsamı (default: loopback)
     --ip <addr>                    mesh için mesh IP (örn. NetBird 100.x adresi)
@@ -221,6 +226,73 @@ def _systemctl(*args: str) -> None:
     subprocess.run(cmd, check=False, timeout=120)
 
 
+# ---------------------------------------------------------------- wizard
+
+MESH_IFACES = ("wt0", "netbird0", "tailscale0")
+
+
+def detect_mesh_ip() -> str:
+    """Mesh (NetBird/Tailscale) arayüz IPv4'ünü bulmayı dene; yoksa ''."""
+    for dev in MESH_IFACES:
+        for cmd in (["ip", "-4", "-o", "addr", "show", dev],
+                    ["ifconfig", dev]):
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True,
+                                     timeout=5).stdout
+            except Exception:
+                continue
+            m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out)
+            if m:
+                return m.group(1)
+    return ""
+
+
+def run_wizard(a) -> int | None:
+    """İnteraktif ilk kurulum. Dönüş: int = bitti (exit code);
+    None = 'yeni kur' seçildi, a.bind/a.ip dolduruldu, normal akış devam etsin."""
+    import getpass
+
+    print("mate_voice — LiveKit sihirbazı")
+    print("Mate Voice'un bir LiveKit sunucusuna ihtiyacı var.\n")
+    ans = input("Mevcut bir LiveKit sunucun var mı, yoksa yeni kurayım mı?\n"
+                "  [Y]eni kur (öneri, otomatik)  /  [m]evcut var: ").strip().lower()
+
+    if ans in ("m", "mevcut", "e", "evet", "var"):
+        # Yalnız bu durumda URL/key/secret sorulur.
+        url = input("LiveKit URL (örn. ws://127.0.0.1:7880 veya wss://...): ").strip()
+        key = input("LiveKit API key: ").strip()
+        secret = getpass.getpass("LiveKit API secret: ").strip()
+        vals = {k: v for k, v in (("LIVEKIT_URL", url),
+                                  ("LIVEKIT_API_KEY", key),
+                                  ("LIVEKIT_API_SECRET", secret)) if v}
+        if not vals:
+            log("Hiç değer girilmedi — çıkılıyor. (Sonra tekrar: setup_livekit.py)")
+            return 1
+        update_env(vals, force=True, dry=a.dry_run)
+        log("\nBitti. Gateway'i yeniden başlat: hermes gateway restart")
+        return 0
+
+    # Yeni kurulum — bind kapsamı. Mesh IP'yi otomatik bulmayı dene.
+    mesh_ip = detect_mesh_ip()
+    default_bind = "mesh" if mesh_ip else "loopback"
+    hint = f" (bulundu: {mesh_ip})" if mesh_ip else ""
+    print("\nDinleme kapsamı:")
+    print(f"  1) mesh     — NetBird/Tailscale mesh IP'sinden{hint}")
+    print("  2) loopback — sadece bu makine (127.0.0.1)")
+    print("  3) public   — 0.0.0.0 (TLS/TURN gerekir, README'ye bak)")
+    sel = input(f"Seçim [{'1' if default_bind == 'mesh' else '2'}]: ").strip()
+    bind = {"1": "mesh", "2": "loopback", "3": "public"}.get(
+        sel, default_bind)
+    ip = ""
+    if bind == "mesh":
+        ip = input(f"Mesh IP [{mesh_ip or 'gerekli'}]: ").strip() or mesh_ip
+        if not ip:
+            log("mesh için IP gerekli — çıkılıyor.")
+            return 1
+    a.bind, a.ip = bind, ip
+    return None  # normal kurulum akışına devam
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> int:
@@ -233,7 +305,14 @@ def main() -> int:
     ap.add_argument("--no-systemd", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--wizard", action="store_true",
+                    help="interaktif sihirbaz (argümansız çalıştırınca da açılır)")
     a = ap.parse_args()
+
+    if a.wizard or (len(sys.argv) == 1 and sys.stdin.isatty()):
+        rc = run_wizard(a)
+        if rc is not None:
+            return rc
 
     if a.bind == "mesh" and not a.ip:
         ap.error("--bind mesh için --ip <mesh-adresi> gerekli")

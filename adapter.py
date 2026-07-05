@@ -782,7 +782,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         join + publish. Marks _want_connected so an unexpected drop triggers
         _reconnect_loop (durable presence; B'nin testi için ajan odada kalır)."""
         if not self.settings.livekit_api_secret:
-            log.error("mate_voice: LIVEKIT_API_SECRET boş — bağlanılamaz")
+            log.error("mate_voice: LIVEKIT_API_SECRET boş — bağlanılamaz. "
+                      "LiveKit yapılandırılmamış: python3 ~/.hermes/plugins/"
+                      "mate_voice/setup_livekit.py sihirbazını çalıştır")
             self._set_fatal_error("config_missing", "LIVEKIT_API_SECRET missing", retryable=False)
             return False
         self._want_connected = True
@@ -2117,6 +2119,11 @@ def _handle_deny_pairing(args: dict, **kw) -> str:
 def check_requirements() -> bool:
     """Heavy deps (livekit, numpy, ...) checked lazily at connect; return True so
     the plugin always registers and connect() can report a precise error."""
+    if not (settings.livekit_url and settings.livekit_api_secret):
+        logger.warning(
+            "mate_voice: LiveKit yapılandırılmamış (LIVEKIT_URL/SECRET boş) — "
+            "kurulum sihirbazı: python3 ~/.hermes/plugins/mate_voice/setup_livekit.py "
+            "(mevcut LiveKit'i de bağlayabilir, yenisini de kurar)")
     try:
         import livekit  # noqa: F401
         return True
