@@ -1,7 +1,7 @@
 name: mate_voice
 label: LiveKit Voice
 kind: platform
-version: 0.2.37
+version: 0.2.38
 description: >
   LiveKit voice platform adapter for Hermes Agent. Carries the Mate voice
   stack (RMS endpointing, smart-turn v3 EOU, barge-in, wake-word gate,
@@ -88,4 +88,16 @@ optional_env:
   - name: MATE_VOICE_ALLOW_ALL_USERS
     description: "Allow any room participant to talk to the agent (dev/test)."
     prompt: "Allow all users? (true/false)"
+    password: false
+  - name: MATE_PUBLIC_TOKEN_URL
+    description: "Public base URL of the token/pairing endpoint handed to clients (default https://mate-token.drascom.uk)."
+    prompt: "Public token URL"
+    password: false
+  - name: MATE_GATEWAY_URL
+    description: "Hermes gateway ws URL included in the pairing config package (default ws://100.111.58.102:8800)."
+    prompt: "Gateway ws URL"
+    password: false
+  - name: MATE_GATEWAY_TOKEN_FILE
+    description: "File the gateway token is read from for the pairing config package (default ~/.hermes/mate_gateway_token)."
+    prompt: "Gateway token file"
     password: false

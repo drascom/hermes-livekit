@@ -80,3 +80,18 @@ gibi). Aksi halde aynı ağdan / SSH tüneli ile erişilir:
 2. `.env`'e LiveKit + STT/TTS host'ları + `MATE_VOICE_CLIENT_KEY` yaz.
 3. Gateway'i başlat → ajan odaya bağlanır, token endpoint açılır.
 4. İstemci endpoint'ten token alıp yukarıdaki sözleşmeyle bağlanır. Brain'e gerek yok.
+
+## 7. Tek-URL pairing (v0.2.38+)
+Client tek adres girer: `https://mate-token.drascom.uk` (proxy → :8830 aiohttp).
+
+- `POST /pair/request` gövde `{device_name, platform}` → `{pair_id, code, expires_in}`
+  (kod 4 hane, TTL 10 dk, IP başına 5/dk rate-limit).
+- Kullanıcı HERHANGİ bir Hermes kanalından onaylar: **"onayla 4829"** →
+  `approve_pairing(code)` tool'u (reddetme: `deny_pairing`).
+- `GET /pair/status?pair_id=<id>` → `{status: pending|approved|denied|expired, config?}`.
+  `approved` olduğunda `config` **TEK SEFER** döner; ikinci istekte `expired`.
+- `GET /pair/claim?ticket=<t>` → tek kullanımlık QR ticket ile onaysız `200 {config}`.
+  Ticket sunucuda üretilir: `hermes mate_voice pair-qr` veya
+  `python3 ~/.hermes/plugins/mate_voice/pair_qr.py` (terminale QR + link basar).
+- `config` paketi: `{livekit_url, room, token_endpoint, client_key, gateway_url, gateway_token}`
+  — `gateway_token` sunucudaki `~/.hermes/mate_gateway_token` dosyasından okunur.

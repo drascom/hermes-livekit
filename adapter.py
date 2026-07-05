@@ -269,6 +269,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # shared key; LiveKit secret stays server-side. Started once in connect(),
         # independent of room reconnects, stopped in disconnect().
         self._token_runner = None
+        # Tek-URL pairing (POST /pair/request → onay → GET /pair/status; ayrıca
+        # QR ticket → GET /pair/claim). Store SQLite (~/.hermes/mate_voice/
+        # pairing.db); rate-limit IP→timestamp listesi (5/dk).
+        self._pairing_store = None
+        self._pair_rate: Dict[str, list] = {}
 
         # Periyodik öz-güncelleme kontrolü: connect()'te bir kez başlar, oda
         # reconnect'lerinden etkilenmez (token server ile aynı kalıp).
@@ -446,6 +451,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         app.router.add_get("/mate/health", self._handle_health)
         app.router.add_get("/mate/token", self._handle_token)
         app.router.add_get("/mate/demo-token", self._handle_demo_token)
+        # Tek-URL pairing (API sözleşmesi SABİT — client buna göre yazılıyor).
+        app.router.add_post("/pair/request", self._handle_pair_request)
+        app.router.add_get("/pair/status", self._handle_pair_status)
+        app.router.add_get("/pair/claim", self._handle_pair_claim)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, self.settings.token_bind, self.settings.token_port)
@@ -675,6 +684,96 @@ class MateVoiceAdapter(BasePlatformAdapter):
             "identity": identity,
             "onboarding": True,
         })
+
+    # ── Tek-URL pairing endpoints ─────────────────────────────────────────
+
+    def _get_pairing_store(self):
+        if self._pairing_store is None:
+            from .voice.pairing import PairingStore
+            self._pairing_store = PairingStore()
+        return self._pairing_store
+
+    def _pair_rate_ok(self, request, limit: int = 5, window_s: float = 60.0) -> bool:
+        """IP başına basit sliding-window rate-limit (5/dk). Nginx arkasında
+        gerçek IP X-Forwarded-For'un İLK öğesi."""
+        fwd = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        ip = fwd or (request.remote or "?")
+        now = time.time()
+        hits = [t for t in self._pair_rate.get(ip, []) if now - t < window_s]
+        if len(hits) >= limit:
+            self._pair_rate[ip] = hits
+            return False
+        hits.append(now)
+        self._pair_rate[ip] = hits
+        if len(self._pair_rate) > 1000:  # bellek emniyeti
+            self._pair_rate = {k: v for k, v in self._pair_rate.items()
+                               if v and now - v[-1] < window_s}
+        return True
+
+    async def _handle_pair_request(self, request):
+        """POST {device_name, platform} → {pair_id, code, expires_in}."""
+        from aiohttp import web
+
+        if not self._pair_rate_ok(request):
+            return web.json_response({"error": "rate limited"}, status=429)
+        try:
+            data = await request.json()
+            if not isinstance(data, dict):
+                raise ValueError
+        except Exception:
+            return web.json_response({"error": "json body required"}, status=400)
+        device_name = str(data.get("device_name") or "").strip() or "unknown-device"
+        platform = str(data.get("platform") or "").strip() or "unknown"
+        try:
+            res = await asyncio.to_thread(
+                self._get_pairing_store().create_request, device_name, platform)
+        except Exception as e:
+            log.warning("mate_voice: pair/request hata: %r", e)
+            return web.json_response({"error": "internal"}, status=500)
+        if res is None:
+            return web.json_response({"error": "too many pending requests"}, status=429)
+        log.info("mate_voice: pairing isteği device=%s platform=%s code=%s",
+                 device_name, platform, res["code"])
+        return web.json_response(res)
+
+    async def _handle_pair_status(self, request):
+        """GET ?pair_id= → {status, config?}. approved → config TEK SEFER."""
+        from aiohttp import web
+
+        pair_id = (request.query.get("pair_id") or "").strip()
+        if not pair_id:
+            return web.json_response({"error": "pair_id required"}, status=400)
+        try:
+            status = await asyncio.to_thread(
+                self._get_pairing_store().poll_status, pair_id)
+        except Exception as e:
+            log.warning("mate_voice: pair/status hata: %r", e)
+            return web.json_response({"error": "internal"}, status=500)
+        if status != "approved":
+            return web.json_response({"status": status})
+        from .voice.pairing import build_config
+        log.info("mate_voice: pairing config teslim edildi pair_id=%s...", pair_id[:8])
+        return web.json_response(
+            {"status": "approved", "config": build_config(self.settings, self.room_name)})
+
+    async def _handle_pair_claim(self, request):
+        """GET ?ticket= → {config}. Tek kullanımlık QR ticket (onaysız —
+        ticket'a sahip olmak yetkidir; sunucu terminalinde üretilir)."""
+        from aiohttp import web
+
+        if not self._pair_rate_ok(request):
+            return web.json_response({"error": "rate limited"}, status=429)
+        ticket = (request.query.get("ticket") or "").strip()
+        try:
+            ok = await asyncio.to_thread(self._get_pairing_store().claim_ticket, ticket)
+        except Exception as e:
+            log.warning("mate_voice: pair/claim hata: %r", e)
+            return web.json_response({"error": "internal"}, status=500)
+        if not ok:
+            return web.json_response({"error": "invalid, expired or used ticket"}, status=404)
+        from .voice.pairing import build_config
+        log.info("mate_voice: QR ticket ile config teslim edildi")
+        return web.json_response({"config": build_config(self.settings, self.room_name)})
 
     # ── Connection lifecycle ──────────────────────────────────────────────
 
@@ -1928,6 +2027,90 @@ class MateVoiceAdapter(BasePlatformAdapter):
 
 
 # ---------------------------------------------------------------------------
+# Tek-URL pairing — Hermes tool'ları (approve_pairing / deny_pairing)
+# ---------------------------------------------------------------------------
+# Kullanıcı HERHANGİ bir kanaldan (ses, telegram, cli...) "onayla 4829" der →
+# LLM approve_pairing(code) çağırır → store'da status=approved → yeni cihaz
+# /pair/status'tan config paketini alır. Store SQLite olduğundan tool ile HTTP
+# handler ayrı süreçlerde bile tutarlıdır.
+
+try:
+    from tools.registry import tool_error, tool_result
+except ImportError:  # eski çekirdek / test ortamı — fail-open JSON
+    def tool_error(message, **extra):  # type: ignore[no-redef]
+        return json.dumps({"error": str(message), **extra}, ensure_ascii=False)
+
+    def tool_result(data=None, **kwargs):  # type: ignore[no-redef]
+        return json.dumps(data if data is not None else kwargs, ensure_ascii=False)
+
+
+APPROVE_PAIRING_SCHEMA = {
+    "name": "approve_pairing",
+    "description": (
+        "Approve a pending device pairing request by its short numeric code. "
+        "Use when the user says something like 'onayla 4829' / 'approve pairing 4829' "
+        "after a new Mate client showed a pairing code."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string",
+                     "description": "The 4-6 digit pairing code shown on the new device."},
+        },
+        "required": ["code"],
+    },
+}
+
+DENY_PAIRING_SCHEMA = {
+    "name": "deny_pairing",
+    "description": (
+        "Deny/reject a pending device pairing request by its short numeric code "
+        "(e.g. user says 'reddet 4829')."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string",
+                     "description": "The 4-6 digit pairing code to deny."},
+        },
+        "required": ["code"],
+    },
+}
+
+
+def _handle_approve_pairing(args: dict, **kw) -> str:
+    from .voice.pairing import PairingStore
+
+    code = str(args.get("code") or "").strip()
+    try:
+        info = PairingStore().approve(code)
+    except Exception as e:
+        return tool_error(f"pairing store error: {e}")
+    if info is None:
+        return tool_error(
+            f"No pending pairing request with code {code!r} (wrong code or expired).")
+    return tool_result(success=True, approved=True, code=code,
+                       device_name=info["device_name"], platform=info["platform"],
+                       message=f"Pairing approved for {info['device_name']} ({info['platform']}).")
+
+
+def _handle_deny_pairing(args: dict, **kw) -> str:
+    from .voice.pairing import PairingStore
+
+    code = str(args.get("code") or "").strip()
+    try:
+        info = PairingStore().deny(code)
+    except Exception as e:
+        return tool_error(f"pairing store error: {e}")
+    if info is None:
+        return tool_error(
+            f"No pending pairing request with code {code!r} (wrong code or expired).")
+    return tool_result(success=True, denied=True, code=code,
+                       device_name=info["device_name"], platform=info["platform"],
+                       message=f"Pairing denied for {info['device_name']} ({info['platform']}).")
+
+
+# ---------------------------------------------------------------------------
 # Plugin helpers + registration
 # ---------------------------------------------------------------------------
 
@@ -1987,6 +2170,25 @@ def register(ctx) -> None:
         ),
     )
 
+    # Tek-URL pairing tool'ları — eski çekirdekte register_tool olmayabilir.
+    register_tool = getattr(ctx, "register_tool", None)
+    if register_tool is not None:
+        try:
+            register_tool(
+                name="approve_pairing", toolset="mate_voice",
+                schema=APPROVE_PAIRING_SCHEMA, handler=_handle_approve_pairing,
+                emoji="🔗",
+            )
+            register_tool(
+                name="deny_pairing", toolset="mate_voice",
+                schema=DENY_PAIRING_SCHEMA, handler=_handle_deny_pairing,
+                emoji="⛔",
+            )
+        except Exception as e:
+            logger.warning("mate_voice: pairing tool kaydı başarısız: %r", e)
+    else:
+        logger.warning("mate_voice: ctx.register_tool yok — pairing tool'ları atlandı")
+
     # CLI: `hermes mate_voice reconfigure` — re-enter connection settings.
     # Registration is optional; older Hermes builds may lack the hook.
     register_cli = getattr(ctx, "register_cli_command", None)
@@ -1996,12 +2198,14 @@ def register(ctx) -> None:
                 "action",
                 nargs="?",
                 default="reconfigure",
-                choices=["reconfigure", "show-key", "check-update", "clear-database"],
+                choices=["reconfigure", "show-key", "check-update", "clear-database",
+                         "pair-qr"],
                 help="reconfigure: bağlantı bilgilerini sorup .env'e yazar · "
                      "show-key: client bağlantı kodunu (key+QR) tekrar göster · "
                      "check-update: yeni sürüm var mı kontrol et (6sn'lik periyodik "
                      "kontrolü beklemeden, çalışan agent dışında manuel) · "
-                     "clear-database: kayıtlı ses kimliklerini temizle",
+                     "clear-database: kayıtlı ses kimliklerini temizle · "
+                     "pair-qr: tek kullanımlık cihaz-eşleştirme QR/linki üret",
             )
 
         def _handler(args):
@@ -2018,6 +2222,9 @@ def register(ctx) -> None:
             if action == "clear-database":
                 from .voice.clear_database import run_clear_database
                 return run_clear_database(args)
+            if action == "pair-qr":
+                from .pair_qr import main as pair_qr_main
+                return pair_qr_main()
             from .voice.reconfigure import run_reconfigure
             return run_reconfigure(args)
 
