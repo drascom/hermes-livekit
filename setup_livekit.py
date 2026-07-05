@@ -14,7 +14,7 @@ URL/key/secret OTOMATİK üretilip .env'e yazılır (hiç sorulmaz); "mevcut var
 ise ancak o zaman URL/key/secret sorulur.
 
 Seçenekler:
-    --bind {loopback,mesh,public}  Dinleme kapsamı (default: loopback)
+    --bind {all,loopback,mesh,public}  Dinleme kapsamı (default: all = 0.0.0.0)
     --ip <addr>                    mesh için mesh IP (örn. NetBird 100.x adresi)
     --prefix <dir>                 Kurulum dizini (default: ~/.hermes/mate_voice/livekit)
     --livekit-version <vX.Y.Z>     Sürüm sabitle (default: GitHub latest)
@@ -35,6 +35,7 @@ import platform
 import re
 import secrets
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -125,8 +126,10 @@ def render_config(bind: str, ip: str, key: str, secret: str) -> str:
         bind_lines = "bind_addresses:\n  - 127.0.0.1\n"
     elif bind == "mesh":
         bind_lines = f"bind_addresses:\n  - 127.0.0.1\n  - {ip}\n"
-    else:  # public
+    else:  # all (varsayılan) / public — tüm arayüzler
         bind_lines = "bind_addresses:\n  - 0.0.0.0\n"
+    # Yalnız "public" (NAT arkası, dışarı açık sunucu) external-IP keşfi yapar;
+    # "all" düz IP/LAN kurulumudur — client sunucuya ulaştığı adresten bağlanır.
     ext = "true" if bind == "public" else "false"
     return (
         "# mate_voice setup_livekit.py tarafından üretildi\n"
@@ -168,7 +171,11 @@ def read_env() -> dict[str, str]:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, _, v = line.partition("=")
-                vals[k.strip()] = v.strip().strip('"').strip("'")
+                v = v.strip()
+                # satır-içi yorumu değere katma (`DEĞER  # açıklama`)
+                if not (v.startswith('"') or v.startswith("'")):
+                    v = v.split(" #", 1)[0].split("\t#", 1)[0].strip()
+                vals[k.strip()] = v.strip('"').strip("'")
     except OSError:
         pass
     return vals
@@ -206,6 +213,16 @@ def update_env(updates: dict[str, str], force: bool, dry: bool) -> list[str]:
     return list(todo)
 
 
+def _sudo_prefix() -> list[str]:
+    """Root değilsek sudo; tty yoksa `-n` (parola sorusuna ASILI KALMASIN —
+    NOPASSWD yoksa hemen düşer, degrade yolu devreye girer)."""
+    if os.geteuid() == 0:
+        return []
+    if sys.stdin.isatty():
+        return ["sudo"]
+    return ["sudo", "-n"]
+
+
 def _sudo_write(path: str, content: str) -> bool:
     """Root gerektiren dosyayı yaz (root değilsek sudo tee)."""
     try:
@@ -213,17 +230,31 @@ def _sudo_write(path: str, content: str) -> bool:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
             return True
-        p = subprocess.run(["sudo", "tee", path], input=content.encode(),
-                           stdout=subprocess.DEVNULL, timeout=60)
+        p = subprocess.run(_sudo_prefix() + ["tee", path], input=content.encode(),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=60)
         return p.returncode == 0
     except Exception as e:
         log(f"! unit yazılamadı ({e}) — elle kurun (içerik aşağıda basıldı)")
         return False
 
 
-def _systemctl(*args: str) -> None:
-    cmd = (["systemctl"] if os.geteuid() == 0 else ["sudo", "systemctl"]) + list(args)
-    subprocess.run(cmd, check=False, timeout=120)
+def _systemctl(*args: str) -> int:
+    cmd = _sudo_prefix() + ["systemctl"] + list(args)
+    try:
+        return subprocess.run(cmd, check=False, timeout=120,
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode
+    except Exception:
+        return 1
+
+
+def _unit_active() -> bool:
+    try:
+        return subprocess.run(["systemctl", "is-active", "--quiet", "livekit-server"],
+                              check=False, timeout=15).returncode == 0
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- wizard
@@ -245,6 +276,19 @@ def detect_mesh_ip() -> str:
             if m:
                 return m.group(1)
     return ""
+
+
+def primary_ip() -> str:
+    """Makinenin birincil (default-route) IPv4'ü; bulunamazsa ''."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 53))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        return ""
 
 
 def run_wizard(a) -> int | None:
@@ -272,19 +316,19 @@ def run_wizard(a) -> int | None:
         log("\nBitti. Gateway'i yeniden başlat: hermes gateway restart")
         return 0
 
-    # Yeni kurulum — bind kapsamı. Mesh IP'yi otomatik bulmayı dene.
-    mesh_ip = detect_mesh_ip()
-    default_bind = "mesh" if mesh_ip else "loopback"
-    hint = f" (bulundu: {mesh_ip})" if mesh_ip else ""
+    # Yeni kurulum — bind kapsamı. Varsayılan: tüm arayüzler (0.0.0.0) — çoğu
+    # kullanıcı mesh/domain'siz düz IP ile bağlanır; client'lara URL sunucuya
+    # ulaştıkları adresten türetilir (pairing Host header'ı).
     print("\nDinleme kapsamı:")
-    print(f"  1) mesh     — NetBird/Tailscale mesh IP'sinden{hint}")
+    print("  1) hepsi    — 0.0.0.0, tüm arayüzler (öneri; düz IP/LAN kurulumu)")
     print("  2) loopback — sadece bu makine (127.0.0.1)")
-    print("  3) public   — 0.0.0.0 (TLS/TURN gerekir, README'ye bak)")
-    sel = input(f"Seçim [{'1' if default_bind == 'mesh' else '2'}]: ").strip()
-    bind = {"1": "mesh", "2": "loopback", "3": "public"}.get(
-        sel, default_bind)
+    print("  3) mesh     — NetBird/Tailscale mesh IP'sinden")
+    print("  4) public   — 0.0.0.0 + external-IP keşfi (NAT arkası; TLS/TURN gerekir)")
+    sel = input("Seçim [1]: ").strip()
+    bind = {"1": "all", "2": "loopback", "3": "mesh", "4": "public"}.get(sel, "all")
     ip = ""
     if bind == "mesh":
+        mesh_ip = detect_mesh_ip() or primary_ip()
         ip = input(f"Mesh IP [{mesh_ip or 'gerekli'}]: ").strip() or mesh_ip
         if not ip:
             log("mesh için IP gerekli — çıkılıyor.")
@@ -293,29 +337,13 @@ def run_wizard(a) -> int | None:
     return None  # normal kurulum akışına devam
 
 
-# ---------------------------------------------------------------- main
+# ---------------------------------------------------------------- install core
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--bind", choices=["loopback", "mesh", "public"], default="loopback")
-    ap.add_argument("--ip", default="", help="mesh bind için IP (örn. 100.x NetBird)")
-    ap.add_argument("--prefix", default=DEFAULT_PREFIX)
-    ap.add_argument("--livekit-version", default=None, help="örn. v1.13.3 (default: latest)")
-    ap.add_argument("--no-systemd", action="store_true")
-    ap.add_argument("--force", action="store_true")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--wizard", action="store_true",
-                    help="interaktif sihirbaz (argümansız çalıştırınca da açılır)")
-    a = ap.parse_args()
-
-    if a.wizard or (len(sys.argv) == 1 and sys.stdin.isatty()):
-        rc = run_wizard(a)
-        if rc is not None:
-            return rc
-
+def run_install(a) -> int:
+    """Argümanları (argparse namespace) alıp kurulumu uygular. İnteraktif DEĞİL."""
     if a.bind == "mesh" and not a.ip:
-        ap.error("--bind mesh için --ip <mesh-adresi> gerekli")
+        log("HATA: --bind mesh için --ip <mesh-adresi> gerekli")
+        return 2
 
     prefix = os.path.abspath(os.path.expanduser(a.prefix))
     cfg_path = os.path.join(prefix, "livekit.yaml")
@@ -382,6 +410,10 @@ def main() -> int:
         unit = render_unit(prefix, os.environ.get("SUDO_USER") or os.environ.get("USER") or "root")
         if os.path.exists(UNIT_PATH) and not a.force:
             log(f"= unit mevcut, atlandı: {UNIT_PATH} (--force ile yenile)")
+            if not dry and not _unit_active():
+                # unit var ama servis çalışmıyor (yarım kalmış kurulum) → başlat.
+                _systemctl("daemon-reload")
+                _systemctl("enable", "--now", "livekit-server")
         elif dry:
             log(f"[dry-run] unit yazılacak: {UNIT_PATH}\n--- unit ---\n{unit}---")
             log("[dry-run] systemctl daemon-reload && enable --now livekit-server")
@@ -392,9 +424,16 @@ def main() -> int:
                 log(f"✓ systemd: {UNIT_PATH} (enable --now)")
             else:
                 print(unit)
+        if not dry and not _unit_active():
+            log("! livekit-server servisi AKTİF DEĞİL — sudo yok/başarısız olabilir.\n"
+                "  Elle: sudo systemctl daemon-reload && "
+                "sudo systemctl enable --now livekit-server\n"
+                f"  (unit: {UNIT_PATH} — yoksa yukarıda basılan içeriği oraya yazın)")
 
-    # 5) Plugin .env — pairing build_config() doğru değerleri dağıtsın
-    url_ip = {"loopback": "127.0.0.1", "mesh": a.ip}.get(a.bind, a.ip or "127.0.0.1")
+    # 5) Plugin .env — agent'ın bağlandığı URL. "all"/"public"te agent yerelden
+    # bağlanır (127.0.0.1); CLIENT URL'i pairing'de Host header'dan türetilir.
+    url_ip = {"loopback": "127.0.0.1", "mesh": a.ip,
+              "all": "127.0.0.1", "public": "127.0.0.1"}.get(a.bind, "127.0.0.1")
     update_env({"LIVEKIT_URL": f"ws://{url_ip}:{PORT_WS}",
                 "LIVEKIT_API_KEY": key,
                 "LIVEKIT_API_SECRET": secret}, a.force, dry)
@@ -405,6 +444,71 @@ def main() -> int:
         log("NOT: public bind seçtiniz — tarayıcı/uzak client için TLS (wss) ve gerekirse "
             "TURN şarttır. Domain + reverse proxy (Caddy/nginx) kurun; bkz. README.")
     return 0
+
+
+# ---------------------------------------------------------------- auto (adapter)
+
+def run_auto(log_fn=None) -> dict | None:
+    """NON-INTERACTIVE otomatik kurulum — adapter ilk başlatmada çağırır
+    (LIVEKIT_MODE=yeni + LIVEKIT_API_SECRET boş). Hiçbir şey sormaz.
+    Bind DEFAULT: 0.0.0.0 (tüm arayüzler) — çoğu kullanıcı mesh/domain'siz düz
+    IP kullanır; client'a URL pairing Host header'ından türetilir (mesh/loopback
+    yalnız interaktif sihirbazda seçenek). LIVEKIT_BIND env'i ile ezilebilir
+    (all|loopback|mesh|public). Başarıda .env'e yazılan LIVEKIT_URL/KEY/SECRET
+    dict'ini döndürür; başarısızlıkta None (çağıran anlaşılır log basar)."""
+    global log
+    if log_fn is not None:
+        log = log_fn  # setup loglarını adapter logger'ına akıt
+    bind = (os.getenv("LIVEKIT_BIND") or "all").strip().lower()
+    if bind not in ("all", "loopback", "mesh", "public"):
+        bind = "all"
+    ip = ""
+    if bind == "mesh":
+        ip = (os.getenv("LIVEKIT_MESH_IP") or "").strip() or detect_mesh_ip() or primary_ip()
+        if not ip:
+            log("! mesh IP bulunamadı → bind=all (0.0.0.0) ile devam")
+            bind = "all"
+    a = argparse.Namespace(bind=bind, ip=ip, prefix=DEFAULT_PREFIX,
+                           livekit_version=None, no_systemd=False,
+                           force=False, dry_run=False)
+    try:
+        rc = run_install(a)
+    except Exception as e:
+        log(f"! otomatik LiveKit kurulumu istisnayla düştü: {e!r}")
+        return None
+    if rc != 0:
+        return None
+    env = read_env()
+    vals = {k: env.get(k, "") for k in
+            ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")}
+    if not all(vals.values()):
+        log("! kurulum bitti ama .env'de LIVEKIT_* eksik kaldı")
+        return None
+    return vals
+
+
+# ---------------------------------------------------------------- main (CLI)
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--bind", choices=["all", "loopback", "mesh", "public"], default="all")
+    ap.add_argument("--ip", default="", help="mesh bind için IP (örn. 100.x NetBird)")
+    ap.add_argument("--prefix", default=DEFAULT_PREFIX)
+    ap.add_argument("--livekit-version", default=None, help="örn. v1.13.3 (default: latest)")
+    ap.add_argument("--no-systemd", action="store_true")
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--wizard", action="store_true",
+                    help="interaktif sihirbaz (argümansız çalıştırınca da açılır)")
+    a = ap.parse_args()
+
+    if a.wizard or (len(sys.argv) == 1 and sys.stdin.isatty()):
+        rc = run_wizard(a)
+        if rc is not None:
+            return rc
+
+    return run_install(a)
 
 
 if __name__ == "__main__":

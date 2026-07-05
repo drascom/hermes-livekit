@@ -32,7 +32,14 @@ def _load_plugin_env() -> None:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
-            val = val.strip().strip('"').strip("'")
+            val = val.strip()
+            # Satır-içi yorum ayıkla (eski şablonda `DEĞER   # açıklama` vardı;
+            # yorum değerin parçası sanılıyordu → çöp secret/dil değerleri).
+            if not (val.startswith('"') or val.startswith("'")):
+                val = val.split(" #", 1)[0].split("\t#", 1)[0].strip()
+                if val == "#" or val.startswith("# "):
+                    val = ""
+            val = val.strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = val
     except Exception:

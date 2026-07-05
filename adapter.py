@@ -27,10 +27,12 @@ memory + auto-enrollment persistence is Phase 2 (see MAP.md / BLOCKER notes).
 """
 
 import asyncio
+import os
 import random
 import json
 import logging
 import re
+import socket
 import time
 from array import array
 from typing import Any, Dict, Optional
@@ -620,13 +622,31 @@ class MateVoiceAdapter(BasePlatformAdapter):
 
         return run_gateway_restart_detached()
 
+    @staticmethod
+    def _request_host(request) -> str:
+        """İsteğin geldiği host (portsuz). Nginx arkasında X-Forwarded-Host.
+        Kullanıcı sunucuya hangi adresle ulaşıyorsa client URL'leri de o hosttan
+        türetilir (IP-only / mesh / domain hepsinde doğru)."""
+        raw = (request.headers.get("X-Forwarded-Host")
+               or request.headers.get("Host") or request.host or "")
+        host = raw.split(",")[0].strip()
+        if host.startswith("["):            # [::1]:8830
+            return host.split("]", 1)[0].lstrip("[")
+        if host.count(":") == 1:            # host:port
+            return host.rsplit(":", 1)[0]
+        return host
+
+    def _client_url(self, request) -> str:
+        from .voice.pairing import client_livekit_url
+        return client_livekit_url(self.settings, self._request_host(request))
+
     async def _handle_health(self, request):
         from aiohttp import web
         return web.json_response({
             "status": "ok",
             "room": self.room_name,
             "connected": bool(self._connected),
-            "url": self.settings.public_livekit_url,
+            "url": self._client_url(request),
         })
 
     async def _handle_token(self, request):
@@ -647,7 +667,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             return web.json_response({"error": "mint failed"}, status=500)
         log.info("mate_voice: token verildi identity=%s room=%s", identity, room)
         return web.json_response({
-            "url": self.settings.public_livekit_url,
+            "url": self._client_url(request),
             "room": room,
             "token": token,
             "identity": identity,
@@ -678,7 +698,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         log.info("mate_voice: demo-token verildi identity=%s room=%s ttl=%ds",
                  identity, room, self.settings.demo_token_ttl_seconds)
         return web.json_response({
-            "url": self.settings.public_livekit_url,
+            "url": self._client_url(request),
             "room": room,
             "token": token,
             "identity": identity,
@@ -754,7 +774,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         from .voice.pairing import build_config
         log.info("mate_voice: pairing config teslim edildi pair_id=%s...", pair_id[:8])
         return web.json_response(
-            {"status": "approved", "config": build_config(self.settings, self.room_name)})
+            {"status": "approved",
+             "config": build_config(self.settings, self.room_name,
+                                    self._request_host(request))})
 
     async def _handle_pair_claim(self, request):
         """GET ?ticket= → {config}. Tek kullanımlık QR ticket (onaysız —
@@ -773,7 +795,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
             return web.json_response({"error": "invalid, expired or used ticket"}, status=404)
         from .voice.pairing import build_config
         log.info("mate_voice: QR ticket ile config teslim edildi")
-        return web.json_response({"config": build_config(self.settings, self.room_name)})
+        return web.json_response(
+            {"config": build_config(self.settings, self.room_name,
+                                    self._request_host(request))})
 
     # ── Connection lifecycle ──────────────────────────────────────────────
 
@@ -782,11 +806,23 @@ class MateVoiceAdapter(BasePlatformAdapter):
         join + publish. Marks _want_connected so an unexpected drop triggers
         _reconnect_loop (durable presence; B'nin testi için ajan odada kalır)."""
         if not self.settings.livekit_api_secret:
-            log.error("mate_voice: LIVEKIT_API_SECRET boş — bağlanılamaz. "
-                      "LiveKit yapılandırılmamış: python3 ~/.hermes/plugins/"
-                      "mate_voice/setup_livekit.py sihirbazını çalıştır")
-            self._set_fatal_error("config_missing", "LIVEKIT_API_SECRET missing", retryable=False)
-            return False
+            # Kurulum sihirbazı AKIŞIN PARÇASI: install'da LIVEKIT_MODE soruldu.
+            # yeni (varsayılan) → LiveKit'i ŞİMDİ otomatik kur (binary+config+
+            # systemd+.env) ve devam et — kullanıcı hiçbir komut çalıştırmaz.
+            # var → kullanıcı mevcut sunucu bilgilerini reconfigure ile girer.
+            if _livekit_mode() in ("var", "mevcut", "existing"):
+                log.error(
+                    "mate_voice: LIVEKIT_MODE=var ama LiveKit bilgileri boş. "
+                    "Mevcut sunucunun bilgilerini gir: hermes mate_voice reconfigure "
+                    "(LiveKit URL + API key + secret) → sonra: hermes gateway restart")
+                self._set_fatal_error("config_missing", "LIVEKIT_API_SECRET missing "
+                                      "(LIVEKIT_MODE=var → run: hermes mate_voice reconfigure)",
+                                      retryable=False)
+                return False
+            log.info("mate_voice: LiveKit yapılandırılmamış + LIVEKIT_MODE=yeni → "
+                     "otomatik yerel kurulum başlıyor (ilk başlatma, tek sefer)...")
+            if not await self._auto_setup_livekit():
+                return False
         self._want_connected = True
         self._ensure_home_channel()  # sessiz auto-sethome ("no home channel" ipucunu önler)
         await self._load_speakers()  # enrolled kişileri belleğe al (varsa)
@@ -794,6 +830,59 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._start_update_checker()      # bağımsız; oda reconnect'lerinden etkilenmez
         await self._ensure_room()
         return await self._open_room()
+
+    async def _auto_setup_livekit(self) -> bool:
+        """setup_livekit.run_auto'yu thread'de çalıştır (binary indir + key üret +
+        config + systemd + plugin .env); yazılan değerleri canlı settings +
+        os.environ'a işle; LiveKit dinlemeye başlayana dek (≤20sn) bekle.
+        İdempotent — yarım kalan kurulumu sonraki reconnect denemesi tamamlar."""
+        from .setup_livekit import run_auto
+
+        try:
+            vals = await asyncio.to_thread(run_auto, log.info)
+        except Exception as e:
+            vals = None
+            log.error("mate_voice: otomatik LiveKit kurulumu istisna: %r", e)
+        if not vals:
+            log.error(
+                "mate_voice: otomatik LiveKit kurulumu BAŞARISIZ. Elle dene: "
+                "python3 ~/.hermes/plugins/mate_voice/setup_livekit.py (sihirbaz) — "
+                "ya da mevcut bir sunucu bağlamak için: hermes mate_voice reconfigure")
+            self._set_fatal_error("livekit_setup_failed",
+                                  "automatic LiveKit install failed", retryable=True)
+            return False
+        for k, v in vals.items():
+            os.environ[k] = v
+        s = self.settings
+        s.livekit_url = vals["LIVEKIT_URL"]
+        s.livekit_api_key = vals["LIVEKIT_API_KEY"]
+        s.livekit_api_secret = vals["LIVEKIT_API_SECRET"]
+        if not os.getenv("MATE_PUBLIC_LIVEKIT_URL"):
+            s.public_livekit_url = s.livekit_url
+        log.info("mate_voice: LiveKit otomatik kuruldu → %s (key=%s)",
+                 s.livekit_url, s.livekit_api_key)
+        await self._wait_livekit_port(s.livekit_url)
+        return True
+
+    async def _wait_livekit_port(self, url: str, timeout: float = 20.0) -> None:
+        """Yeni kurulan livekit-server'ın portu açılana kadar bekle (best-effort)."""
+        m = re.match(r"wss?://([^:/]+)(?::(\d+))?", url or "")
+        if not m:
+            return
+        host, port = m.group(1), int(m.group(2) or 7880)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                conn = socket.create_connection((host, port), timeout=2)
+                conn.close()
+                log.info("mate_voice: LiveKit %s:%d dinliyor", host, port)
+                return
+            except OSError:
+                await asyncio.sleep(1.0)
+        log.warning(
+            "mate_voice: LiveKit %s:%d %.0f sn içinde açılmadı — bağlantı yine de "
+            "denenecek (systemd servisi geç kalkıyor olabilir; kontrol: "
+            "sudo systemctl status livekit-server)", host, port, timeout)
 
     def _ensure_home_channel(self) -> None:
         """Sessiz auto-sethome (yuanbao kalıbı): MATE_HOME_CHANNEL boşsa odayı home
@@ -2116,14 +2205,36 @@ def _handle_deny_pairing(args: dict, **kw) -> str:
 # Plugin helpers + registration
 # ---------------------------------------------------------------------------
 
+def _livekit_mode() -> str:
+    """Kurulumda sorulan LIVEKIT_MODE: 'yeni' (varsayılan — ilk başlatmada
+    otomatik yerel LiveKit kur) ya da 'var'/'mevcut' (kullanıcı mevcut sunucu
+    bilgilerini reconfigure ile girer)."""
+    return (os.getenv("LIVEKIT_MODE") or "yeni").strip().lower()
+
+
+def _livekit_configured() -> bool:
+    return bool(settings.livekit_url and settings.livekit_api_secret)
+
+
+def _auto_setup_pending() -> bool:
+    """LiveKit bilgisi yok ama mod 'yeni' → adapter ilk connect'te otomatik
+    kuracak; platform yine de enable edilmeli."""
+    return (not settings.livekit_api_secret) and _livekit_mode() not in (
+        "var", "mevcut", "existing")
+
+
 def check_requirements() -> bool:
     """Heavy deps (livekit, numpy, ...) checked lazily at connect; return True so
     the plugin always registers and connect() can report a precise error."""
-    if not (settings.livekit_url and settings.livekit_api_secret):
-        logger.warning(
-            "mate_voice: LiveKit yapılandırılmamış (LIVEKIT_URL/SECRET boş) — "
-            "kurulum sihirbazı: python3 ~/.hermes/plugins/mate_voice/setup_livekit.py "
-            "(mevcut LiveKit'i de bağlayabilir, yenisini de kurar)")
+    if not _livekit_configured():
+        if _auto_setup_pending():
+            logger.info(
+                "mate_voice: LiveKit yapılandırılmamış (LIVEKIT_MODE=yeni) — "
+                "ilk başlatmada OTOMATİK kurulacak, ek komut gerekmez")
+        else:
+            logger.warning(
+                "mate_voice: LIVEKIT_MODE=var ama LiveKit bilgileri boş — "
+                "mevcut sunucu bilgilerini gir: hermes mate_voice reconfigure")
     try:
         import livekit  # noqa: F401
         return True
@@ -2133,16 +2244,16 @@ def check_requirements() -> bool:
 
 
 def validate_config(config) -> bool:
-    return bool(settings.livekit_url and settings.livekit_api_secret)
+    return _livekit_configured() or _auto_setup_pending()
 
 
 def is_connected(config) -> bool:
-    return bool(settings.livekit_url and settings.livekit_api_secret)
+    return _livekit_configured() or _auto_setup_pending()
 
 
 def _env_enablement() -> Optional[dict]:
-    import os
-    if not (os.getenv("LIVEKIT_URL") and os.getenv("LIVEKIT_API_SECRET")):
+    if not ((os.getenv("LIVEKIT_URL") and os.getenv("LIVEKIT_API_SECRET"))
+            or _auto_setup_pending()):
         return None
     room = settings.livekit_room
     return {

@@ -2,29 +2,43 @@
 
 Mate Voice, Hermes'e LiveKit üzerinden **canlı sesli asistan** ekler: konuş, dinlesin, sesli yanıt versin.
 
-## Nereye bağlanır
-- **LiveKit:** `LIVEKIT_URL` (örn. `wss://your-livekit.example.com`) · **Oda:** `MATE_LIVEKIT_ROOM` (varsayılan `mate-hermes-test`)
-
-## Girilen değerler (`~/.hermes/.env`)
-- `LIVEKIT_URL` · `LIVEKIT_API_KEY` · `LIVEKIT_API_SECRET` — LiveKit bağlantısı
-- `STT_HOST`/`STT_PORT` (whisper) · `VOX_HOST`/`VOX_PORT` (TTS) — ses servisleri
-- `MATE_VOICE_CLIENT_KEY` — istemcinin `X-Mate-Key`'i (boş bırakılırsa ilk başlatmada otomatik üretilir)
+## LiveKit — ek komut GEREKMEZ
+Kurulumda sorulan **LIVEKIT_MODE** ne yaptığını belirler:
+- **boş / `yeni`** (varsayılan): gateway **ilk başlatmada LiveKit'i otomatik kurar**
+  (binary + key + config + systemd, 0.0.0.0) ve bağlantı değerlerini `.env`'e kendisi yazar.
+- **`var`**: mevcut sunucunun bilgilerini gir: `hermes mate_voice reconfigure`
+  (LiveKit URL + API key + secret sorar, `.env`'e yazar).
 
 ## Son adım
-0. **LiveKit ayarı (ilk kurulum):**
-   ```
-   python3 ~/.hermes/plugins/mate_voice/setup_livekit.py
-   ```
-   Sihirbaz sorar: *mevcut LiveKit sunucun var mı, yoksa yeni kurayım mı?*
-   Yeni kurulumda URL/key/secret otomatik üretilip `.env`'e yazılır (hiç sorulmaz).
-1. Gateway'i yeniden başlat:
+1. Gateway'i başlat / yeniden başlat:
    ```
    hermes gateway restart
    ```
-2. İlk başlatmada konsolda **CLIENT_KEY ve QR kodu** çıkar (key otomatik üretildiyse). Bu değeri
-   **client (mate-mac) ayarlarındaki `X-Mate-Key` / Client Key** alanına gir.
-3. Bağlantı doğrulaması — `~/.hermes/logs/gateway.log` içinde:
+2. Doğrulama — `~/.hermes/logs/gateway.log` içinde:
    `✓ mate_voice connected` ve `Gateway running with 1 platform(s)`.
-4. Bağlantı bilgilerini sonradan değiştirmek için: `hermes mate_voice reconfigure`
-   (sorar, `.env`'e yazar; sonra gateway restart).
-5. Bağlantı kodunu (key+QR) tekrar görmek için: `hermes mate_voice show-key`.
+
+## Client bağlantısı (pairing — otomatik)
+Client'a (mate-mac) yalnız **tek adres** girilir; gerisi pairing ile otomatik dağıtılır:
+- Sunucuda `hermes mate_voice pair-qr` → QR/link, client okutur → LiveKit URL,
+  oda, client key, gateway adresi **kendiliğinden** gelir.
+- Ya da client "Eşleştir" der → ekrandaki kodu herhangi bir Hermes kanalından
+  `approve_pairing` ile onaylarsın.
+- `X-Mate-Key`'i elle girmek yalnız gelişmiş senaryo içindir:
+  `hermes mate_voice show-key` ile görülebilir.
+
+## Sunucu sağlayıcı firewall'u (önemli)
+Client dışarıdan bağlanacaksa şu portları sağlayıcının güvenlik duvarında
+(OCI security list / AWS SG / Hetzner FW / ufw) **açın**:
+- **7880/tcp** — LiveKit ws (sinyal)
+- **7881/tcp** — LiveKit RTC/TCP fallback
+- **50000–50200/udp** — LiveKit medya (WebRTC)
+- **8830/tcp** — mate_voice token/pairing endpoint'i
+- **8800/tcp** — Hermes gateway RPC (client oturum/araç kanalı; token korumalı)
+
+## Ayarlar / bakım
+- Bağlantı bilgilerini değiştir: `hermes mate_voice reconfigure` → gateway restart
+- Girilen değerler: `LIVEKIT_URL/KEY/SECRET` (otomatik kurulumda kendisi yazar),
+  `STT_HOST/PORT` (whisper), `VOX_HOST/PORT` (TTS), `MATE_VOICE_CLIENT_KEY`
+  (boşsa ilk başlatmada otomatik üretilir)
+- Not: TLS/domain kullanıyorsan client'a duyurulan adresi `MATE_PUBLIC_LIVEKIT_URL`
+  ile sabitle; yoksa adres, client'ın sunucuya ulaştığı host'tan otomatik türetilir.

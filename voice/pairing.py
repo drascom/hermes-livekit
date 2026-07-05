@@ -15,6 +15,7 @@ plugin `install --force` yeniden kurulumlarından etkilenmez. Sadece stdlib
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -81,14 +82,58 @@ def read_gateway_token() -> str:
         return ""
 
 
-def build_config(settings, room: str) -> dict:
-    """Client'a verilecek config paketi — değerler sunucudaki GERÇEK config'ten."""
+_LOCAL_HOSTS = {"", "127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def _url_host(url: str) -> str:
+    m = re.match(r"[a-z+]+://\[?([^\]/:]+)", (url or "").strip())
+    return m.group(1) if m else ""
+
+
+def _url_port(url: str, default: int) -> int:
+    m = re.match(r"[a-z+]+://[^/:]+:(\d+)", (url or "").strip())
+    return int(m.group(1)) if m else default
+
+
+def client_livekit_url(settings, request_host: str = "") -> str:
+    """Client'a duyurulacak LiveKit URL'i. Öncelik:
+    1) MATE_PUBLIC_LIVEKIT_URL (açık ayar — domain/TLS kurulumları)
+    2) LIVEKIT_URL'in host'u gerçek bir adresse (mesh/LAN IP) → o
+    3) İsteğin geldiği Host header'ı — kullanıcı sunucuya hangi adresle
+       ulaşıyorsa LiveKit de aynı host + LiveKit portu (düz-IP kurulumu;
+       LIVEKIT_URL loopback/0.0.0.0 iken tek doğru kaynak budur)."""
+    explicit = plugin_env("MATE_PUBLIC_LIVEKIT_URL")
+    if explicit:
+        return explicit
+    url = getattr(settings, "livekit_url", "") or ""
+    if _url_host(url) not in _LOCAL_HOSTS:
+        return url
+    if request_host:
+        return f"ws://{request_host}:{_url_port(url, 7880)}"
+    return getattr(settings, "public_livekit_url", "") or url
+
+
+def client_gateway_url(request_host: str = "") -> str:
+    """Client'a duyurulacak Hermes gateway ws URL'i: MATE_GATEWAY_URL açıkça
+    set edilmişse o; değilse isteğin Host header'ından türetilir (:8800)."""
+    explicit = plugin_env("MATE_GATEWAY_URL")
+    if explicit:
+        return explicit
+    if request_host:
+        return f"ws://{request_host}:8800"
+    return "ws://127.0.0.1:8800"
+
+
+def build_config(settings, room: str, request_host: str = "") -> dict:
+    """Client'a verilecek config paketi — değerler sunucudaki GERÇEK config'ten.
+    request_host: pairing isteğinin Host header'ı (portsuz) — livekit/gateway
+    URL'leri açık env yoksa bundan türetilir (IP-only, mesh, domain hepsi doğru)."""
     return {
-        "livekit_url": settings.public_livekit_url,
+        "livekit_url": client_livekit_url(settings, request_host),
         "room": room,
         "token_endpoint": public_base_url(),
         "client_key": settings.client_key,
-        "gateway_url": plugin_env("MATE_GATEWAY_URL", "ws://100.111.58.102:8800"),
+        "gateway_url": client_gateway_url(request_host),
         "gateway_token": read_gateway_token(),
     }
 

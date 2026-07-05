@@ -1,7 +1,7 @@
 name: mate_voice
 label: LiveKit Voice
 kind: platform
-version: 0.2.40
+version: 0.2.41
 description: >
   LiveKit voice platform adapter for Hermes Agent. Carries the Mate voice
   stack (RMS endpointing, smart-turn v3 EOU, barge-in, wake-word gate,
@@ -12,6 +12,16 @@ description: >
   MessageEvent → Hermes brain; brain reply → send() → vox TTS published back.
 author: mate
 requires_env:
+  # LiveKit sihirbazı KURULUM AKIŞININ PARÇASI: tek soru burada sorulur, iş
+  # gateway'in İLK BAŞLATMASINDA yapılır (çekirdekte post-install hook yok).
+  - name: LIVEKIT_MODE
+    description: >-
+      Mevcut bir LiveKit sunucun var mı? BOŞ bırak veya 'yeni' yaz → gateway
+      ilk başlatmada LiveKit'i OTOMATİK kurar (binary+config+systemd, 0.0.0.0)
+      ve bağlantı değerlerini kendisi yazar — ek komut gerekmez. 'var' yaz →
+      kurulumdan sonra `hermes mate_voice reconfigure` ile URL/key/secret gir.
+    prompt: "LiveKit: yeni mi kurulsun, mevcut mu? (boş=yeni / var)"
+    password: false
   - name: STT_HOST
     description: "Whisper STT host (Wyoming). e.g. 192.168.1.10"
     prompt: "STT host"
