@@ -8,9 +8,16 @@
 #   hermes setup                 # "Mate Voice (LiveKit)" → LiveKit modu / STT / VOX / oda
 #   hermes gateway restart
 #   hermes mate_voice pair-qr    # client eşleştir
+#
+# NOT: `curl ... | bash` altında script'in kendisi stdin'dedir; interaktif
+# hermes promptu bunu "cevap" sanıp otomatik geçerdi. Bu yüzden interaktif
+# hermes komutlarının stdin'ini gerçek terminale (/dev/tty) yönlendiririz —
+# SADECE o komuta (tüm shell'e DEĞİL; yoksa bash script'i terminalden okumaya
+# çalışıp bozulur). Terminal yoksa /dev/null → promptlar temiz atlanır.
 set -euo pipefail
 
 ENV_FILE="${HERMES_HOME:-$HOME/.hermes}/.env"
+TTYIN=/dev/tty; [ -e /dev/tty ] || TTYIN=/dev/null
 REPO="drascom/hermes-livekit"
 PLUGIN="mate_voice"
 
@@ -29,7 +36,7 @@ KEYS=(
 )
 
 echo "==> 1) Plugin kaldırılıyor: $PLUGIN"
-hermes plugins remove "$PLUGIN" || echo "   (kurulu değil — atlanıyor)"
+hermes plugins remove "$PLUGIN" < "$TTYIN" || echo "   (kurulu değil — atlanıyor)"
 
 echo "==> 2) .env temizleniyor: $ENV_FILE"
 if [ -f "$ENV_FILE" ]; then
@@ -45,7 +52,7 @@ else
 fi
 
 echo "==> 3) Plugin yeniden kuruluyor: $REPO"
-hermes plugins install "$REPO"
+hermes plugins install "$REPO" < "$TTYIN"
 
 echo
 echo "✓ Bitti. Sıradaki adımlar:"
