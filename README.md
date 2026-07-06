@@ -1,74 +1,80 @@
-# hermes-livekit
+# Mate Voice for Hermes
 
-LiveKit voice platform adapter for **Hermes Agent** — the **Mate/Candan** voice stack as a
-single `BasePlatformAdapter` plugin: RMS endpointing, smart-turn v3 EOU, barge-in, wake-word
-gate, live transcript, speaker-ID, and an ack'd RPC handshake with clients.
+Mate Voice is a Hermes plugin that adds a live voice channel through LiveKit.
+You speak to a Mate client, Hermes listens, and the reply is spoken back.
 
-## Kurulum
+## Install
 
 ```bash
 hermes plugins install drascom/hermes-livekit
+hermes gateway restart
 ```
 
-Güncelleme (git tabanlı):
+To update later:
 
 ```bash
 hermes plugins update mate_voice
+hermes gateway restart
 ```
 
-Plugin ayrıca periyodik olarak yeni sürümü kontrol eder ve sesli olarak haber verir;
-onay verdiğinde kendini `hermes plugins update` ile günceller.
+## Setup
 
-## Yapılandırma
-
-`.env.example`'ı kopyalayıp `.env` yapın ve doldurun (LiveKit URL/secret, STT/TTS host'ları,
-oda, token sunucusu). Örnek host'lar generic'tir — kendi altyapınızla değiştirin.
-
-## LiveKit sunucusunu plugin ile kurma (opsiyonel)
-
-Elinizde çalışan bir LiveKit yoksa plugin'in setup script'i her şeyi kurar:
-binary indirir (GitHub releases, linux amd64/arm64/armv7), crypto-random API
-key/secret üretir, minimal `livekit.yaml` yazar, systemd unit'i kurup başlatır
-ve plugin `.env`'ini günceller (`LIVEKIT_URL/API_KEY/API_SECRET`) — pairing
-config paketi böylece otomatik doğru değerleri dağıtır.
+Run the Hermes gateway setup flow:
 
 ```bash
-# SİHİRBAZ (önerilen) — "mevcut LiveKit var mı, yeni kurayım mı?" diye sorar;
-# yeni kurulumda mesh IP'yi (wt0) otomatik bulur, key/secret otomatik yazılır
-python3 ~/.hermes/plugins/mate_voice/setup_livekit.py
-
-# non-interaktif: mesh (NetBird/Tailscale) kurulumu — TLS gerekmez
-python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --bind mesh --ip 100.x.y.z
-
-# non-interaktif: sadece localhost
-python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --bind loopback
-
-# önce ne yapacağını gör
-python3 ~/.hermes/plugins/mate_voice/setup_livekit.py --dry-run
+hermes setup gateway
 ```
 
-Seçenekler: `--bind {loopback,mesh,public}`, `--ip`, `--prefix` (default
-`~/.hermes/mate_voice/livekit`), `--livekit-version vX.Y.Z`, `--no-systemd`,
-`--force`, `--dry-run`. **Idempotent:** mevcut binary/config/env değerlerine
-sormadan dokunmaz; `--force` ile ezilir. macOS'ta systemd yerine elle başlatma
-komutu basılır (binary için `brew install livekit`).
+Choose **Mate Voice (LiveKit)** and enter:
 
-**TLS/TURN notu:** `--bind public` seçerseniz tarayıcı/uzak client'lar için
-domain + sertifika (wss) ve NAT arkasında TURN şarttır — bunu script
-otomatikleştirmez; Caddy/nginx reverse proxy kurun. Mesh-only kurulumda
-(NetBird/Tailscale) TLS gerekmez, `ws://` yeterlidir.
+- Whether Mate Voice should install a new LiveKit server or use an existing one
+- `STT_HOST` and `STT_PORT` for Whisper STT
+- `VOX_HOST` and `VOX_PORT` for VOX TTS
 
-## Bağımlı / ilişkili repolar
+If you choose a new LiveKit server, Mate Voice installs and configures it on
+the first gateway start.
 
-Bu plugin tek başına çalışmaz; şu bileşenlere bağlıdır (aynı Mate/Candan sistemi):
+If you already have LiveKit, enter the LiveKit URL, API key, and API secret.
 
-- **STT / TTS servisleri** → [`drascom/mate-media`](https://github.com/drascom/mate-media)
-  *(planlanan)* — whisper (Wyoming STT) + vox (TTS). Plugin `STT_HOST`/`VOX_HOST` ile bunlara bağlanır.
-- **İstemciler** → [`drascom/mate-clients`](https://github.com/drascom/mate-clients)
-  *(planlanan)* — mate-mac (+ ilerde mate-ios, mate-android, mate-satellite). LiveKit odasına
-  bağlanıp bu plugin'le RPC handshake (`mate.hello` / `mate.set_awake`) yapar.
-- **LiveKit sunucusu** — ayrı LiveKit server kurulumu gerekir (agent `LIVEKIT_URL` ile bağlanır).
+## Pair a client
 
-## Lisans
+After the gateway is running:
 
-Özel — Mate/Candan asistan sistemi.
+```bash
+hermes mate_voice pair-qr
+```
+
+Scan the QR code or open the link in the Mate client. Pairing sends the client
+everything it needs: LiveKit URL, room, client key, and gateway address.
+
+## Change settings
+
+```bash
+hermes mate_voice reconfigure
+hermes gateway restart
+```
+
+Useful commands:
+
+```bash
+hermes mate_voice pair-qr       # pair a client
+hermes mate_voice show-key      # show the client key
+hermes mate_voice check-update  # check for plugin updates
+```
+
+## Firewall
+
+If clients connect from outside the server, open:
+
+- `7880/tcp` for LiveKit signaling
+- `7881/tcp` for LiveKit TCP fallback
+- `7882/udp` for LiveKit media
+- `8830/tcp` for Mate Voice pairing and tokens
+- `8800/tcp` for the Hermes gateway
+
+## Related components
+
+Mate Voice expects separate STT and TTS services:
+
+- Whisper STT, configured with `STT_HOST` and `STT_PORT`
+- VOX TTS, configured with `VOX_HOST` and `VOX_PORT`
