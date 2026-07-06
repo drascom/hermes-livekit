@@ -81,6 +81,48 @@ def _primary_ip() -> str:
         return ""
 
 
+def _is_private_ip(ip: str) -> bool:
+    """RFC1918/loopback/link-local mı (yani NAT arkası, dışarıdan erişilemez)."""
+    try:
+        import ipaddress
+        a = ipaddress.ip_address(ip)
+        return a.is_private or a.is_loopback or a.is_link_local
+    except Exception:
+        return False
+
+
+def _stun_public_ip(timeout: float = 3.0) -> str:
+    """Gerçek public IPv4'ü STUN binding request ile bul (yalnız stdlib). ''=bulunamadı.
+    NAT arkası cloud VPS'te _primary_ip() özel IP (10.x) döndürür; pair-qr linkinin
+    internetten erişilebilmesi için buradan public IP alınır."""
+    import socket
+    import struct
+    import os as _os
+    txid = _os.urandom(12)
+    req = struct.pack(">HH", 0x0001, 0) + b"\x21\x12\xa4\x42" + txid  # STUN Binding Request
+    for host, port in (("stun.l.google.com", 19302), ("stun.cloudflare.com", 3478)):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(timeout)
+            s.sendto(req, (host, port))
+            data, _ = s.recvfrom(2048)
+            s.close()
+            i = 20  # STUN header'ı atla
+            while i + 4 <= len(data):
+                atype, alen = struct.unpack(">HH", data[i:i + 4])
+                i += 4
+                val = data[i:i + alen]
+                i += alen + ((4 - alen % 4) % 4)  # 4-byte hizalama
+                if atype in (0x0020, 0x0001) and len(val) >= 8 and val[1] == 0x01:
+                    addr = val[4:8]
+                    if atype == 0x0020:  # XOR-MAPPED-ADDRESS → magic cookie ile XOR
+                        addr = bytes(b ^ c for b, c in zip(addr, b"\x21\x12\xa4\x42"))
+                    return ".".join(str(x) for x in addr)
+        except Exception:
+            continue
+    return ""
+
+
 def public_base_url(request_host: str = "") -> str:
     """Token/pairing endpoint'inin client'a duyurulan adresi. Açık env yoksa
     isteğin geldiği host'tan türetilir (kullanıcı hangi adresle ulaştıysa o);
@@ -90,6 +132,13 @@ def public_base_url(request_host: str = "") -> str:
         return explicit.rstrip("/")
     port = plugin_env("MATE_VOICE_TOKEN_PORT", "8830")
     host = request_host or _primary_ip() or "127.0.0.1"
+    # CLI (pair-qr, istek yok) + birincil IP özelse (NAT arkası cloud VPS): gerçek
+    # public IP'yi STUN ile bul → QR/link internetten erişilebilir olsun. LAN client'lar
+    # request_host yolunu kullandığından bu yalnız istek-yok (CLI) durumunu etkiler.
+    if not request_host and _is_private_ip(host):
+        pub = _stun_public_ip()
+        if pub:
+            host = pub
     return f"http://{host}:{port}"
 
 

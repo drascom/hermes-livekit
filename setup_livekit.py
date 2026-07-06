@@ -391,9 +391,10 @@ def run_install(a) -> int:
             log(f"✓ yeni API key üretildi: {key}")
 
     # 3) Config
+    config_written = False  # YENİ config (yeni key) yazıldı mı → aşağıda restart tetikler
     cfg = render_config(a.bind, a.ip, key, secret)
     if os.path.exists(cfg_path) and not a.force:
-        pass  # yukarıda bildirildi
+        pass  # yukarıda bildirildi (key korundu)
     elif dry:
         log(f"[dry-run] config yazılacak: {cfg_path}\n--- livekit.yaml ---\n{cfg}---")
     else:
@@ -401,6 +402,7 @@ def run_install(a) -> int:
         with open(cfg_path, "w", encoding="utf-8") as f:
             f.write(cfg)
         os.chmod(cfg_path, 0o600)  # secret içerir
+        config_written = True
         log(f"✓ config: {cfg_path}")
 
     # 4) systemd (yalnız linux)
@@ -432,6 +434,11 @@ def run_install(a) -> int:
                 "  Elle: sudo systemctl daemon-reload && "
                 "sudo systemctl enable --now livekit-server\n"
                 f"  (unit: {UNIT_PATH} — yoksa yukarıda basılan içeriği oraya yazın)")
+        # YENİ config (yeni key) yazıldıysa çalışan server'ı RESTART et: `enable --now`
+        # zaten aktif serviste no-op olur → eski key bellekte kalıp agent 401 alırdı.
+        elif config_written and not dry:
+            _systemctl("restart", "livekit-server")
+            log("↻ livekit-server restart (yeni config/key yüklendi)")
 
     # 5) Plugin .env — agent'ın bağlandığı URL. "all"/"public"te agent yerelden
     # bağlanır (127.0.0.1); CLIENT URL'i pairing'de Host header'dan türetilir.
