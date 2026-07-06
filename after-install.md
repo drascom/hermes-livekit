@@ -68,3 +68,17 @@ hermes hermes_livekit show-key      # show the client key
 hermes hermes_livekit reconfigure   # change settings
 hermes gateway restart          # restart after changes
 ```
+
+## Uninstall
+
+`hermes plugins remove hermes_livekit` removes only the plugin code. The LiveKit
+server (its systemd service, binary, config, and data) is separate and keeps
+running. To remove everything in one step:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/drascom/hermes-livekit/main/uninstall.sh | bash
+```
+
+This removes the plugin, the `livekit-server` service and
+`~/.hermes/mate_voice/livekit`, and the LiveKit/STT/VOX keys in `~/.hermes/.env`
+(backed up first); it also offers to delete the pairing and speaker databases.
