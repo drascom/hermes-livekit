@@ -1,4 +1,4 @@
-"""Interactive reconfigure for mate_voice connection settings.
+"""Interactive reconfigure for hermes_livekit connection settings.
 
 Lets the user re-enter LiveKit / STT / VOX / token / client-key env values
 after install, writing them to ~/.hermes/.env via Hermes config utils.
@@ -50,7 +50,7 @@ def run_reconfigure(args=None) -> int:
     # Lazy import: keep handler import-safe even if Hermes internals shift.
     from hermes_cli.config import get_env_value, save_env_value
 
-    print("mate_voice — bağlantı bilgilerini yeniden yapılandır")
+    print("hermes_livekit — bağlantı bilgilerini yeniden yapılandır")
     print("Boş Enter = mevcut değeri koru. İptal: Ctrl-C\n")
 
     changed = 0
@@ -114,7 +114,7 @@ def run_show_key(args=None) -> int:
         print("`hermes gateway restart` ile ilk başlatmada otomatik üretilir.")
         return 0
 
-    print("mate_voice — client bağlantı kodu\n")
+    print("hermes_livekit — client bağlantı kodu\n")
     print(f"MATE_VOICE_CLIENT_KEY: {key}")
     print("client (mate-mac) → 'X-Mate-Key' / Client Key alanına gir.")
     _print_qr(key)

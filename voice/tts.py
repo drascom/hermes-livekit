@@ -27,7 +27,7 @@ import websockets
 from .config import settings
 from . import services
 
-log = logging.getLogger("mate_voice.tts")
+log = logging.getLogger("hermes_livekit.tts")
 
 
 @dataclass

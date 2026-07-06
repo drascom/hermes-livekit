@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# mate_voice (Mate Voice / LiveKit) plugin'ini SIFIRDAN kurar:
+# hermes_livekit (Hermes LiveKit / LiveKit) plugin'ini SIFIRDAN kurar:
 #   1) Plugin'i kaldır            (hermes plugins remove)
 #   2) ~/.hermes/.env'den LiveKit ile ilgili satırları temizle (önce yedek alır)
 #   3) Plugin'i GitHub main'den yeniden kur  (hermes plugins install)
 #
 # Kurulumdan sonra yapılandırma:
-#   hermes setup                 # "Mate Voice (LiveKit)" → LiveKit modu / STT / VOX / oda
+#   hermes setup                 # "Hermes LiveKit" → LiveKit modu / STT / VOX / oda
 #   hermes gateway restart
-#   hermes mate_voice pair-qr    # client eşleştir
+#   hermes hermes_livekit pair-qr    # client eşleştir
 #
 # NOT: `curl ... | bash` altında script'in kendisi stdin'dedir; interaktif
 # hermes promptu bunu "cevap" sanıp otomatik geçerdi. Bu yüzden interaktif
@@ -19,9 +19,9 @@ set -euo pipefail
 ENV_FILE="${HERMES_HOME:-$HOME/.hermes}/.env"
 TTYIN=/dev/tty; [ -e /dev/tty ] || TTYIN=/dev/null
 REPO="drascom/hermes-livekit"
-PLUGIN="mate_voice"
+PLUGIN="hermes_livekit"
 
-# .env'den silinecek mate_voice (LiveKit + STT/VOX) anahtarları.
+# .env'den silinecek hermes_livekit (LiveKit + STT/VOX) anahtarları.
 KEYS=(
   LIVEKIT_MODE
   LIVEKIT_URL
@@ -56,6 +56,6 @@ hermes plugins install "$REPO" < "$TTYIN"
 
 echo
 echo "✓ Bitti. Sıradaki adımlar:"
-echo "   hermes setup                 # Mate Voice → LiveKit modu / STT / VOX / oda"
+echo "   hermes setup                 # Hermes LiveKit → LiveKit modu / STT / VOX / oda"
 echo "   hermes gateway restart"
-echo "   hermes mate_voice pair-qr    # client eşleştir"
+echo "   hermes hermes_livekit pair-qr    # client eşleştir"

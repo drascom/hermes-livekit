@@ -1,4 +1,4 @@
-# mate_voice plugin — Python bağımlılıkları.
+# hermes_livekit plugin — Python bağımlılıkları.
 #
 # Hermes'in native plugin installer'ı bunları OTOMATİK KURMAZ (sadece git clone +
 # .example + requires_env + after-install.md). Bu yüzden plugin yüklenirken

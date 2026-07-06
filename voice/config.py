@@ -87,7 +87,7 @@ def _print_key_banner(key: str, persisted: bool) -> None:
     )
     try:
         import logging
-        logging.getLogger("mate_voice.config").warning(
+        logging.getLogger("hermes_livekit.config").warning(
             "MATE_VOICE_CLIENT_KEY üretildi: %s (%s)", key,
             "persisted" if persisted else "persist FAILED")
     except Exception:

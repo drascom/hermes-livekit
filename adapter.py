@@ -1,4 +1,4 @@
-"""Mate Voice — Hermes gateway platform adapter (real implementation).
+"""Hermes LiveKit — Hermes gateway platform adapter (real implementation).
 
 Ports `mate-brain/brain/voice/livekit_agent.py::LiveKitAgent` onto the Hermes
 `BasePlatformAdapter` contract. The Mate voice stack (RMS endpointing,
@@ -62,7 +62,7 @@ from .voice.tts import synthesize_stream, to_s16le
 logger = logging.getLogger(__name__)
 log = logger  # parity with ported code
 
-PLATFORM_NAME = "mate_voice"
+PLATFORM_NAME = "hermes_livekit"
 
 # Gateway tool-onayı (approval) resolve — BEST-EFFORT: eski Hermes çekirdeğinde
 # bu API olmayabilir → yoksa resolve çağrıları sessizce düşer (plugin çökmez).
@@ -72,7 +72,7 @@ try:
 except ImportError as _approval_import_err:  # pragma: no cover
     resolve_gateway_approval = None  # type: ignore[assignment]
     logger.warning(
-        "mate_voice: gateway approval resolve API yok, tool-onay resolve devre dışı: %r",
+        "hermes_livekit: gateway approval resolve API yok, tool-onay resolve devre dışı: %r",
         _approval_import_err,
     )
 
@@ -308,7 +308,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 speaker_id=settings.speaker_id_enabled,
             )
         except Exception as e:
-            log.warning("mate_voice: deps ensure atlandı: %r", e)
+            log.warning("hermes_livekit: deps ensure atlandı: %r", e)
 
         # Smart-turn EOU (lazy, fail-open).
         self.turn_detector = None
@@ -321,9 +321,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     settings.turn_detector_file,
                     settings.turn_detector_threshold,
                 )
-                log.info("mate_voice: smart-turn EOU aktif")
+                log.info("hermes_livekit: smart-turn EOU aktif")
             except Exception as e:
-                log.warning("mate_voice: smart-turn kurulamadı: %r", e)
+                log.warning("hermes_livekit: smart-turn kurulamadı: %r", e)
 
         # Speaker-ID + plugin-local enrollment store (Faz 2 / onboarding).
         # Store, SpeakerID açıkken kurulur; reload connect()'te yapılır (async DB).
@@ -340,7 +340,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 if self.speaker is not None:
                     self.speaker_store = SpeakerStore()
             except Exception as e:
-                log.warning("mate_voice: speaker-ID kurulamadı: %r", e)
+                log.warning("hermes_livekit: speaker-ID kurulamadı: %r", e)
 
     @staticmethod
     def _ensure_speaker_model() -> str:
@@ -364,19 +364,19 @@ class MateVoiceAdapter(BasePlatformAdapter):
         )
         try:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            log.warning("mate_voice: speaker modeli indiriliyor (bir kez) → %s", dst)
+            log.warning("hermes_livekit: speaker modeli indiriliyor (bir kez) → %s", dst)
             tmp = dst + ".part"
             urllib.request.urlretrieve(url, tmp)
             os.replace(tmp, dst)
-            log.info("mate_voice: speaker modeli indirildi (%d bayt)", os.path.getsize(dst))
+            log.info("hermes_livekit: speaker modeli indirildi (%d bayt)", os.path.getsize(dst))
             return dst
         except Exception as e:
-            log.warning("mate_voice: speaker modeli indirilemedi (%r) — speaker-ID kapalı kalır", e)
+            log.warning("hermes_livekit: speaker modeli indirilemedi (%r) — speaker-ID kapalı kalır", e)
             return ""
 
     @property
     def name(self) -> str:
-        return "Mate Voice"
+        return "Hermes LiveKit"
 
     # ── Token ─────────────────────────────────────────────────────────────
 
@@ -441,12 +441,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._token_runner is not None:
             return
         if not self.settings.client_key:
-            log.warning("mate_voice: token endpoint KAPALI (MATE_VOICE_CLIENT_KEY boş)")
+            log.warning("hermes_livekit: token endpoint KAPALI (MATE_VOICE_CLIENT_KEY boş)")
             return
         try:
             from aiohttp import web
         except Exception as e:
-            log.warning("mate_voice: aiohttp yok, token endpoint atlandı: %r", e)
+            log.warning("hermes_livekit: aiohttp yok, token endpoint atlandı: %r", e)
             return
 
         app = web.Application()
@@ -463,7 +463,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             await site.start()
         except Exception as e:
-            log.warning("mate_voice: token endpoint başlatılamadı (%s:%s): %r",
+            log.warning("hermes_livekit: token endpoint başlatılamadı (%s:%s): %r",
                         self.settings.token_bind, self.settings.token_port, e)
             try:
                 await runner.cleanup()
@@ -471,7 +471,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 pass
             return
         self._token_runner = runner
-        log.info("mate_voice: token endpoint AÇIK http://%s:%s/mate/token",
+        log.info("hermes_livekit: token endpoint AÇIK http://%s:%s/mate/token",
                  self.settings.token_bind, self.settings.token_port)
 
     async def _stop_token_server(self) -> None:
@@ -503,7 +503,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             if (not self._auto_restart_triggered and RUNNING_VERSION != "0"
                     and is_newer(installed_version(), RUNNING_VERSION)):
                 self._auto_restart_triggered = True
-                log.info("mate_voice: [watch] disk %s > çalışan %s → hızlı restart",
+                log.info("hermes_livekit: [watch] disk %s > çalışan %s → hızlı restart",
                          installed_version(), RUNNING_VERSION)
                 asyncio.create_task(self._auto_restart_for_update())
 
@@ -522,17 +522,17 @@ class MateVoiceAdapter(BasePlatformAdapter):
             if (not self._auto_restart_triggered and RUNNING_VERSION != "0"
                     and is_newer(installed_version(), RUNNING_VERSION)):
                 self._auto_restart_triggered = True
-                log.info("mate_voice: disk sürümü (%s) > çalışan (%s) → otomatik restart",
+                log.info("hermes_livekit: disk sürümü (%s) > çalışan (%s) → otomatik restart",
                          installed_version(), RUNNING_VERSION)
                 asyncio.create_task(self._auto_restart_for_update())
                 continue
             try:
                 latest = await check_for_update()
             except Exception as e:
-                log.warning("mate_voice: güncelleme kontrolü hata: %r", e)
+                log.warning("hermes_livekit: güncelleme kontrolü hata: %r", e)
                 continue
             if latest:
-                log.info("mate_voice: güncelleme mevcut: %s", latest)
+                log.info("hermes_livekit: güncelleme mevcut: %s", latest)
                 self._pending_update_version = latest
                 self._update_offer_announced = False
 
@@ -562,9 +562,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             await self._room.local_participant.send_text(payload, topic="mate.update")
         except Exception as e:
-            log.warning("mate_voice: mate.update publish hatası: %s", e)
+            log.warning("hermes_livekit: mate.update publish hatası: %s", e)
         await self._speak_standalone(
-            f"Bu arada, mate_voice için bir güncelleme var, sürüm {version}. "
+            f"Bu arada, Hermes LiveKit için bir güncelleme var, sürüm {version}. "
             "Yüklememi istersen 'güncelle' de ya da karttan onayla."
         )
 
@@ -576,7 +576,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             await self._room.local_participant.send_text(payload, topic="mate.reminder")
         except Exception as e:
-            log.warning("mate_voice: mate.reminder publish hatası: %s", e)
+            log.warning("hermes_livekit: mate.reminder publish hatası: %s", e)
 
     async def _auto_restart_for_update(self) -> None:
         """Disk'te daha yeni sürüm var ama çalışan kod eski → SIGUSR1 ile aktive et."""
@@ -586,19 +586,19 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._shutting_down = True
         ok, out = await asyncio.to_thread(self._run_gateway_restart_detached)
         if ok:
-            log.info("mate_voice: otomatik restart tetiklendi: %s", out.strip())
+            log.info("hermes_livekit: otomatik restart tetiklendi: %s", out.strip())
         else:
-            log.warning("mate_voice: otomatik restart tetiklenemedi: %s", out)
+            log.warning("hermes_livekit: otomatik restart tetiklenemedi: %s", out)
 
     async def _apply_update(self, version: str) -> None:
-        log.info("mate_voice: güncelleme uygulanıyor → %s", version)
+        log.info("hermes_livekit: güncelleme uygulanıyor → %s", version)
         await self._speak_standalone("Tamam, güncelliyorum, bir saniye.")
         ok, output = await asyncio.to_thread(self._run_install_force)
         if not ok:
-            log.warning("mate_voice: güncelleme başarısız: %s", output)
+            log.warning("hermes_livekit: güncelleme başarısız: %s", output)
             await self._speak_standalone("Güncelleme başarısız oldu, loglara bakman gerekebilir.")
             return
-        log.info("mate_voice: güncelleme tamam (%s)", version)
+        log.info("hermes_livekit: güncelleme tamam (%s)", version)
         await self._speak_standalone(
             f"Güncelledim, sürüm {version}. Birkaç saniye içinde yeniden başlıyorum."
         )
@@ -606,9 +606,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._shutting_down = True
         restarted, r_out = await asyncio.to_thread(self._run_gateway_restart_detached)
         if restarted:
-            log.info("mate_voice: detached gateway restart planlandı: %s", r_out.strip())
+            log.info("hermes_livekit: detached gateway restart planlandı: %s", r_out.strip())
         else:
-            log.warning("mate_voice: gateway restart tetiklenemedi: %s", r_out)
+            log.warning("hermes_livekit: gateway restart tetiklenemedi: %s", r_out)
 
     @staticmethod
     def _run_install_force() -> tuple:
@@ -663,9 +663,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             token = self._mint_client_token(identity, room)
         except Exception as e:
-            log.warning("mate_voice: token mint hatası: %r", e)
+            log.warning("hermes_livekit: token mint hatası: %r", e)
             return web.json_response({"error": "mint failed"}, status=500)
-        log.info("mate_voice: token verildi identity=%s room=%s", identity, room)
+        log.info("hermes_livekit: token verildi identity=%s room=%s", identity, room)
         return web.json_response({
             "url": self._client_url(request),
             "room": room,
@@ -693,9 +693,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 identity, room, ttl_seconds=self.settings.demo_token_ttl_seconds
             )
         except Exception as e:
-            log.warning("mate_voice: demo-token mint hatası: %r", e)
+            log.warning("hermes_livekit: demo-token mint hatası: %r", e)
             return web.json_response({"error": "mint failed"}, status=500)
-        log.info("mate_voice: demo-token verildi identity=%s room=%s ttl=%ds",
+        log.info("hermes_livekit: demo-token verildi identity=%s room=%s ttl=%ds",
                  identity, room, self.settings.demo_token_ttl_seconds)
         return web.json_response({
             "url": self._client_url(request),
@@ -748,11 +748,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
             res = await asyncio.to_thread(
                 self._get_pairing_store().create_request, device_name, platform)
         except Exception as e:
-            log.warning("mate_voice: pair/request hata: %r", e)
+            log.warning("hermes_livekit: pair/request hata: %r", e)
             return web.json_response({"error": "internal"}, status=500)
         if res is None:
             return web.json_response({"error": "too many pending requests"}, status=429)
-        log.info("mate_voice: pairing isteği device=%s platform=%s code=%s",
+        log.info("hermes_livekit: pairing isteği device=%s platform=%s code=%s",
                  device_name, platform, res["code"])
         return web.json_response(res)
 
@@ -767,12 +767,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
             status = await asyncio.to_thread(
                 self._get_pairing_store().poll_status, pair_id)
         except Exception as e:
-            log.warning("mate_voice: pair/status hata: %r", e)
+            log.warning("hermes_livekit: pair/status hata: %r", e)
             return web.json_response({"error": "internal"}, status=500)
         if status != "approved":
             return web.json_response({"status": status})
         from .voice.pairing import build_config
-        log.info("mate_voice: pairing config teslim edildi pair_id=%s...", pair_id[:8])
+        log.info("hermes_livekit: pairing config teslim edildi pair_id=%s...", pair_id[:8])
         return web.json_response(
             {"status": "approved",
              "config": build_config(self.settings, self.room_name,
@@ -789,12 +789,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             ok = await asyncio.to_thread(self._get_pairing_store().claim_ticket, ticket)
         except Exception as e:
-            log.warning("mate_voice: pair/claim hata: %r", e)
+            log.warning("hermes_livekit: pair/claim hata: %r", e)
             return web.json_response({"error": "internal"}, status=500)
         if not ok:
             return web.json_response({"error": "invalid, expired or used ticket"}, status=404)
         from .voice.pairing import build_config
-        log.info("mate_voice: QR ticket ile config teslim edildi")
+        log.info("hermes_livekit: QR ticket ile config teslim edildi")
         return web.json_response(
             {"config": build_config(self.settings, self.room_name,
                                     self._request_host(request))})
@@ -812,14 +812,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
             # var → kullanıcı mevcut sunucu bilgilerini reconfigure ile girer.
             if _livekit_mode() in ("var", "mevcut", "existing"):
                 log.error(
-                    "mate_voice: LIVEKIT_MODE=var ama LiveKit bilgileri boş. "
-                    "Mevcut sunucunun bilgilerini gir: hermes mate_voice reconfigure "
+                    "hermes_livekit: LIVEKIT_MODE=var ama LiveKit bilgileri boş. "
+                    "Mevcut sunucunun bilgilerini gir: hermes hermes_livekit reconfigure "
                     "(LiveKit URL + API key + secret) → sonra: hermes gateway restart")
                 self._set_fatal_error("config_missing", "LIVEKIT_API_SECRET missing "
-                                      "(LIVEKIT_MODE=var → run: hermes mate_voice reconfigure)",
+                                      "(LIVEKIT_MODE=var → run: hermes hermes_livekit reconfigure)",
                                       retryable=False)
                 return False
-            log.info("mate_voice: LiveKit yapılandırılmamış + LIVEKIT_MODE=yeni → "
+            log.info("hermes_livekit: LiveKit yapılandırılmamış + LIVEKIT_MODE=yeni → "
                      "otomatik yerel kurulum başlıyor (ilk başlatma, tek sefer)...")
             if not await self._auto_setup_livekit():
                 return False
@@ -842,12 +842,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
             vals = await asyncio.to_thread(run_auto, log.info)
         except Exception as e:
             vals = None
-            log.error("mate_voice: otomatik LiveKit kurulumu istisna: %r", e)
+            log.error("hermes_livekit: otomatik LiveKit kurulumu istisna: %r", e)
         if not vals:
             log.error(
-                "mate_voice: otomatik LiveKit kurulumu BAŞARISIZ. Elle dene: "
-                "python3 ~/.hermes/plugins/mate_voice/setup_livekit.py (sihirbaz) — "
-                "ya da mevcut bir sunucu bağlamak için: hermes mate_voice reconfigure")
+                "hermes_livekit: otomatik LiveKit kurulumu BAŞARISIZ. Elle dene: "
+                "python3 ~/.hermes/plugins/hermes_livekit/setup_livekit.py (sihirbaz) — "
+                "ya da mevcut bir sunucu bağlamak için: hermes hermes_livekit reconfigure")
             self._set_fatal_error("livekit_setup_failed",
                                   "automatic LiveKit install failed", retryable=True)
             return False
@@ -859,7 +859,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         s.livekit_api_secret = vals["LIVEKIT_API_SECRET"]
         if not os.getenv("MATE_PUBLIC_LIVEKIT_URL"):
             s.public_livekit_url = s.livekit_url
-        log.info("mate_voice: LiveKit otomatik kuruldu → %s (key=%s)",
+        log.info("hermes_livekit: LiveKit otomatik kuruldu → %s (key=%s)",
                  s.livekit_url, s.livekit_api_key)
         await self._wait_livekit_port(s.livekit_url)
         return True
@@ -875,12 +875,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
             try:
                 conn = socket.create_connection((host, port), timeout=2)
                 conn.close()
-                log.info("mate_voice: LiveKit %s:%d dinliyor", host, port)
+                log.info("hermes_livekit: LiveKit %s:%d dinliyor", host, port)
                 return
             except OSError:
                 await asyncio.sleep(1.0)
         log.warning(
-            "mate_voice: LiveKit %s:%d %.0f sn içinde açılmadı — bağlantı yine de "
+            "hermes_livekit: LiveKit %s:%d %.0f sn içinde açılmadı — bağlantı yine de "
             "denenecek (systemd servisi geç kalkıyor olabilir; kontrol: "
             "sudo systemctl status livekit-server)", host, port, timeout)
 
@@ -908,9 +908,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
             if data.get("MATE_HOME_CHANNEL") != self.room_name:
                 data["MATE_HOME_CHANNEL"] = self.room_name
                 atomic_yaml_write(cfg, data)
-            log.info("mate_voice: auto-sethome → home channel = %s", self.room_name)
+            log.info("hermes_livekit: auto-sethome → home channel = %s", self.room_name)
         except Exception as e:
-            log.warning("mate_voice: auto-sethome config yazılamadı (env set edildi): %r", e)
+            log.warning("hermes_livekit: auto-sethome config yazılamadı (env set edildi): %r", e)
 
     async def _load_speakers(self) -> None:
         """Enrolled speaker'ları DB'den SpeakerID belleğine yükle. Speaker-ID
@@ -920,9 +920,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             speakers = await self.speaker_store.all_speaker_embeddings()
             self.speaker.reload(speakers)
-            log.info("mate_voice: %d enrolled speaker yüklendi", len(speakers))
+            log.info("hermes_livekit: %d enrolled speaker yüklendi", len(speakers))
         except Exception as e:
-            log.warning("mate_voice: speaker reload başarısız: %r", e)
+            log.warning("hermes_livekit: speaker reload başarısız: %r", e)
 
     async def _ensure_room(self) -> None:
         """Pre-create the room with a long empty_timeout so LiveKit doesn't close
@@ -940,9 +940,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 empty_timeout=86400,       # 24h — boş odayı kapatma
                 departure_timeout=86400,
             ))
-            log.info("mate_voice: oda hazır (empty_timeout=24h): %s", self.room_name)
+            log.info("hermes_livekit: oda hazır (empty_timeout=24h): %s", self.room_name)
         except Exception as e:
-            log.warning("mate_voice: create_room atlandı (%r)", e)
+            log.warning("hermes_livekit: create_room atlandı (%r)", e)
         finally:
             try:
                 await lk.aclose()
@@ -961,7 +961,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         @room.on("track_subscribed")
         def _on_track_subscribed(track, publication, participant):
             if track.kind == rtc.TrackKind.KIND_AUDIO and participant.identity != "assistant":
-                log.info("mate_voice: ses track'i abone (%s)", participant.identity)
+                log.info("hermes_livekit: ses track'i abone (%s)", participant.identity)
                 ident = getattr(participant, "identity", None)
                 if ident:
                     self._attr_cache.setdefault(ident, {}).update(
@@ -987,11 +987,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 self._attr_cache.setdefault(ident, {}).update(changed)
             except Exception:
                 pass
-            log.info("mate_voice: attrs değişti (%s): %r", ident, changed_attributes)
+            log.info("hermes_livekit: attrs değişti (%s): %r", ident, changed_attributes)
 
         @room.on("disconnected")
         def _on_disconnected(reason):
-            log.warning("mate_voice: odadan koptu (%s)", reason)
+            log.warning("hermes_livekit: odadan koptu (%s)", reason)
             self._connected = False
             # Kasıtlı kapatma (disconnect()) değilse otomatik yeniden bağlan.
             if self._want_connected and not self._reconnecting:
@@ -1016,7 +1016,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
 
         token = self._mint_token()
         await room.connect(self.settings.livekit_url, token)
-        log.info("mate_voice: '%s' odasına bağlandı (%s)",
+        log.info("hermes_livekit: '%s' odasına bağlandı (%s)",
                  self.room_name, self.settings.livekit_url)
 
         # Publish one audio source/track for TTS replies.
@@ -1038,7 +1038,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 req = json.loads(data.payload or "{}")
             except (ValueError, TypeError):
                 raise rtc.RpcError(code=400, message="bad payload")
-            log.info("mate_voice: mate.hello (%s): %r", data.caller_identity, req)
+            log.info("hermes_livekit: mate.hello (%s): %r", data.caller_identity, req)
             return json.dumps({
                 "ready": True, "agent": "candan", "proto": 1,
                 "session_id": self._active_session_id,
@@ -1057,7 +1057,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 self._wake_at = time.monotonic()
             elif not awake:
                 self._wake_at = 0.0
-            log.info("mate_voice: mate.set_awake (%s): %s", ident, awake)
+            log.info("hermes_livekit: mate.set_awake (%s): %s", ident, awake)
             return json.dumps({"ok": True, "awake": awake})
 
         async def _rpc_approval_resolve(data: "rtc.RpcInvocationData") -> str:
@@ -1077,9 +1077,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     # o an sırada bekleyen TÜM onayları tek seferde çözer (resolve_all).
                     resolve_gateway_approval(pa["session_key"], choice, resolve_all=(choice == "always"))
                 except Exception as e:
-                    log.warning("mate_voice: approval RPC resolve hatası: %s", e)
+                    log.warning("hermes_livekit: approval RPC resolve hatası: %s", e)
                 asyncio.create_task(self._close_approval(pa["id"]))
-            log.info("mate_voice: mate.approval.resolve (%s): %s",
+            log.info("hermes_livekit: mate.approval.resolve (%s): %s",
                      data.caller_identity, choice)
             return json.dumps({"ok": True, "choice": choice})
 
@@ -1094,10 +1094,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
             self._update_offer_announced = False
             asyncio.create_task(self._close_update_card())
             if action == "apply" and version:
-                log.info("mate_voice: güncelleme karttan onaylandı (%s)", version)
+                log.info("hermes_livekit: güncelleme karttan onaylandı (%s)", version)
                 asyncio.create_task(self._apply_update(version))
             else:
-                log.info("mate_voice: güncelleme karttan ertelendi (%s)", action)
+                log.info("hermes_livekit: güncelleme karttan ertelendi (%s)", action)
             return json.dumps({"ok": True, "action": action})
 
         async def _rpc_interrupt(data: "rtc.RpcInvocationData") -> str:
@@ -1110,7 +1110,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             participant = room.remote_participants.get(ident) if ident else None
             last = self._last_speaker_by_participant.get(ident) if ident else None
             sid_s, sname_s = last if last else (None, None)
-            log.info("mate_voice: mate.interrupt (%s) → /stop (speaker_id=%s)", ident, sid_s)
+            log.info("hermes_livekit: mate.interrupt (%s) → /stop (speaker_id=%s)", ident, sid_s)
             asyncio.create_task(self._dispatch_turn("/stop", sname_s, sid_s, participant, None))
             return json.dumps({"ok": True})
 
@@ -1124,7 +1124,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             room.local_participant.register_rpc_method(
                 "mate.interrupt", _rpc_interrupt)
         except Exception as e:
-            log.warning("mate_voice: RPC kayıt atlandı (%r)", e)
+            log.warning("hermes_livekit: RPC kayıt atlandı (%r)", e)
 
         # Catch any human tracks that were already published before we joined.
         for participant in room.remote_participants.values():
@@ -1153,10 +1153,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     self._consume_tasks.clear()  # eski track'ler ölü
                     await self._ensure_room()     # uzun empty_timeout'u garanti et
                     if await self._open_room():
-                        log.info("mate_voice: yeniden bağlandı")
+                        log.info("hermes_livekit: yeniden bağlandı")
                         break
                 except Exception as e:
-                    log.warning("mate_voice: reconnect denemesi başarısız: %r", e)
+                    log.warning("hermes_livekit: reconnect denemesi başarısız: %r", e)
                 delay = min(delay * 1.5, 15.0)
         finally:
             self._reconnecting = False
@@ -1243,12 +1243,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     )
                     language = attrs.get("language") or self.settings.stt_language
                     stt = WhisperSession(stt_host, stt_port, language)
-                    log.info("mate_voice: STT=%s (%s:%s) dil=%s",
+                    log.info("hermes_livekit: STT=%s (%s:%s) dil=%s",
                              engine_name, stt_host, stt_port, language or "(auto)")
                     try:
                         await stt.start(rate=STT_RATE, width=STT_WIDTH, channels=STT_CHANNELS)
                     except (ConnectionError, OSError) as e:
-                        log.warning("mate_voice: STT erişilemiyor: %s", e)
+                        log.warning("hermes_livekit: STT erişilemiyor: %s", e)
                         stt = None
                         continue
                     buf = bytearray()
@@ -1334,12 +1334,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
                             timeout=60.0,
                         )
                     except asyncio.TimeoutError:
-                        log.warning("mate_voice: utterance işleme 60sn aştı, atlandı")
+                        log.warning("hermes_livekit: utterance işleme 60sn aştı, atlandı")
                         self._set_agent_state("idle")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            log.warning("mate_voice: track tüketimi bitti (%s)", e)
+            log.warning("hermes_livekit: track tüketimi bitti (%s)", e)
         finally:
             if stt is not None:
                 try:
@@ -1374,10 +1374,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             emb = await asyncio.to_thread(sp.embed_pcm, pcm, STT_RATE, 2, 1)
             name, score = sp.identify(emb)
-            log.info("mate_voice: speaker-ID %s (%.3f)", name or "unknown", score)
+            log.info("hermes_livekit: speaker-ID %s (%.3f)", name or "unknown", score)
             return name, emb
         except Exception as e:
-            log.warning("mate_voice: speaker-ID failed: %s", e)
+            log.warning("hermes_livekit: speaker-ID failed: %s", e)
             return None, None
 
     async def _handle_utterance(
@@ -1390,9 +1390,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             text = (await stt.finish()).strip()
         except (ConnectionError, OSError, asyncio.TimeoutError) as e:
-            log.warning("mate_voice: STT başarısız: %s", e)
+            log.warning("hermes_livekit: STT başarısız: %s", e)
             return
-        log.info("mate_voice: duyuldu %r", text)
+        log.info("hermes_livekit: duyuldu %r", text)
         self._debug(f"stt_final: {text[:40]}" if text else "stt_final: (boş)")
 
         # Bekleyen tool-onayı: yanıt awake durumundan BAĞIMSIZ çözülmeli
@@ -1414,9 +1414,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     # o an bekleyen tüm onayları tek seferde çözer (resolve_all).
                     resolve_gateway_approval(pa["session_key"], choice, resolve_all=(choice == "always"))
                 except Exception as e:
-                    log.warning("mate_voice: approval resolve hatası: %s", e)
+                    log.warning("hermes_livekit: approval resolve hatası: %s", e)
                 asyncio.create_task(self._close_approval(pa["id"]))
-                log.info("mate_voice: onay sesli çözüldü: %s", choice)
+                log.info("hermes_livekit: onay sesli çözüldü: %s", choice)
                 self._set_agent_state("idle")
                 return
 
@@ -1429,11 +1429,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         )
         if is_wake_word or not (awake or woke):
             reason = "wake kelimesi" if is_wake_word else "uyku modunda söz"
-            log.info("mate_voice: %s, atlandı: %r", reason, text[:60])
+            log.info("hermes_livekit: %s, atlandı: %r", reason, text[:60])
             self._set_agent_state("idle")
             return
         if text and looks_hallucinated(text):
-            log.info("mate_voice: transcript hayalet, atlanıyor: %r", text[:80])
+            log.info("hermes_livekit: transcript hayalet, atlanıyor: %r", text[:80])
             text = ""
         if not text:
             return
@@ -1441,7 +1441,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if _is_stop_command(text):
             if self._pending_enroll is not None:
                 self._pending_enroll = None
-                log.info("mate_voice: enrollment iptal (stop komutu %r)", text[:40])
+                log.info("hermes_livekit: enrollment iptal (stop komutu %r)", text[:40])
                 en = self._is_en(self._attrs(participant).get("language"))
                 await self._enroll_say(
                     "Okay, cancelled." if en else "Tamam, vazgeçtim.", participant)
@@ -1454,7 +1454,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             # başarısız olabilir → son-konuşmacı haritasından hedefle (A-fix).
             last_s = self._last_speaker_by_participant.get(ident_s) if ident_s else None
             sid_s, sname_s = last_s if last_s else (None, None)
-            log.info("mate_voice: stop komutu %r → /stop (speaker_id=%s)", text[:40], sid_s)
+            log.info("hermes_livekit: stop komutu %r → /stop (speaker_id=%s)", text[:40], sid_s)
             await self._dispatch_turn("/stop", sname_s, sid_s, participant, track)
             self._set_agent_state("idle")
             return
@@ -1465,10 +1465,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
             self._update_offer_announced = False
             asyncio.create_task(self._close_update_card())
             if is_affirmative_reply(text):
-                log.info("mate_voice: güncelleme onaylandı (%s)", version)
+                log.info("hermes_livekit: güncelleme onaylandı (%s)", version)
                 asyncio.create_task(self._apply_update(version))
                 return
-            log.info("mate_voice: güncelleme teklifi geçti, normal devam: %r", text[:40])
+            log.info("hermes_livekit: güncelleme teklifi geçti, normal devam: %r", text[:40])
             # düş — kullanıcının asıl sözü normal akışa gitsin (kaybolmasın).
 
         speaker, emb = await self._identify(pcm)
@@ -1500,14 +1500,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             text = (await reader.read_all()).strip()
         except Exception as e:
-            log.warning("mate_voice: yazılı giriş okunamadı: %s", e)
+            log.warning("hermes_livekit: yazılı giriş okunamadı: %s", e)
             return
         if not text:
             return
         ident = getattr(participant, "identity", None)
         last = self._last_speaker_by_participant.get(ident) if ident else None
         sid, sname = last if last else (None, None)
-        log.info("mate_voice: yazılı giriş %r (%s) → speaker_id=%s", text[:80], ident, sid)
+        log.info("hermes_livekit: yazılı giriş %r (%s) → speaker_id=%s", text[:80], ident, sid)
         await self._dispatch_turn(text, sname, sid, participant, None)
 
     def _enqueue_turn(self, text, speaker, speaker_id, participant, track) -> None:
@@ -1613,7 +1613,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 self._active_session_id = entry.session_id
                 self._publish_session(entry.session_id, speaker_id, user_name)
             except Exception as e:
-                log.warning("mate_voice: session_id duyurulamadı: %r", e)
+                log.warning("hermes_livekit: session_id duyurulamadı: %r", e)
         self._set_agent_state("thinking")
         prev_speaker_id = self._active_turn_speaker_id
         self._active_turn_speaker_id = speaker_id
@@ -1647,7 +1647,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         try:
             await self._room.local_participant.send_text(payload, topic="mate.approval")
         except Exception as e:
-            log.warning("mate_voice: mate.approval publish hatası: %s", e)
+            log.warning("hermes_livekit: mate.approval publish hatası: %s", e)
         await self._speak_standalone(
             f"Şunu yapmak için iznini istiyorum: {desc}. "
             "'onayla', 'sürekli izin ver' ya da 'reddet' de."
@@ -1692,7 +1692,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 sid = sp.id_for(name) if name else None
                 ok = sid == target_id
                 log.info(
-                    "mate_voice: barge-in speaker gate %s (speaker=%r score=%.3f target=%s)",
+                    "hermes_livekit: barge-in speaker gate %s (speaker=%r score=%.3f target=%s)",
                     "ALLOW" if ok else "block", name, score, target_id,
                 )
                 return ok
@@ -1701,19 +1701,19 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 score = self._embedding_similarity(emb, pending_emb)
                 ok = score >= self.settings.barge_in_speaker_threshold
                 log.info(
-                    "mate_voice: barge-in enrollment gate %s (score=%.3f)",
+                    "hermes_livekit: barge-in enrollment gate %s (score=%.3f)",
                     "ALLOW" if ok else "block", score,
                 )
                 return ok
             name, score = sp.identify(emb)
             ok = name is not None
             log.info(
-                "mate_voice: barge-in speaker gate %s (speaker=%r score=%.3f)",
+                "hermes_livekit: barge-in speaker gate %s (speaker=%r score=%.3f)",
                 "ALLOW" if ok else "block", name, score,
             )
             return ok
         except Exception as e:
-            log.warning("mate_voice: barge-in speaker gate failed: %s", e)
+            log.warning("hermes_livekit: barge-in speaker gate failed: %s", e)
             return False
 
     @staticmethod
@@ -1775,7 +1775,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._pending_enroll = {"emb": emb, "stage": "ask_name"}
         en = self._is_en(self._attrs(participant).get("language"))
         ask = "Okay, what's your name?" if en else "Tamam, adın ne?"
-        log.info("mate_voice: enrollment (açık komut %r) — isim soruluyor", text[:40])
+        log.info("hermes_livekit: enrollment (açık komut %r) — isim soruluyor", text[:40])
         self._publish_speaker(None, None, guest=True)
         await self._enroll_say(ask, participant)
 
@@ -1791,13 +1791,13 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 await self._finish_enrollment(participant)
                 return
             self._pending_enroll = None
-            log.info("mate_voice: enrollment onaylanmadı (%r) → iptal", text[:40])
+            log.info("hermes_livekit: enrollment onaylanmadı (%r) → iptal", text[:40])
             await self._enroll_say(
                 "Okay, I didn't save it." if en else "Tamam, kaydetmedim.", participant)
             return
         name = self._parse_name(text)
         if not name:
-            log.info("mate_voice: enrollment — isim ayrıştırılamadı (%r), tekrar soruluyor", text[:40])
+            log.info("hermes_livekit: enrollment — isim ayrıştırılamadı (%r), tekrar soruluyor", text[:40])
             retry = ("I didn't catch your name. Can you say it again?"
                      if en else "Adını anlayamadım, tekrar söyler misin?")
             await self._enroll_say(retry, participant)
@@ -1825,10 +1825,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
                         sid, emb_to_bytes(pend[key]), dim, mid, source="explicit-enroll"
                     )
             await self._load_speakers()
-            log.info("mate_voice: enrollment — %r kaydedildi (id=%s)", name, sid)
+            log.info("hermes_livekit: enrollment — %r kaydedildi (id=%s)", name, sid)
         except Exception as e:
             self._pending_enroll = None
-            log.warning("mate_voice: enrollment başarısız (%s)", e)
+            log.warning("hermes_livekit: enrollment başarısız (%s)", e)
             fail = (
                 "I couldn't save your voice right now. Please try again later."
                 if en else "Şu anda seni kaydedemedim. Lütfen biraz sonra tekrar dene."
@@ -1893,7 +1893,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         except asyncio.CancelledError:
             return SendResult(success=True, message_id="barge_in")
         except Exception as e:
-            log.warning("mate_voice: send/TTS hatası: %r", e)
+            log.warning("hermes_livekit: send/TTS hatası: %r", e)
             return SendResult(success=False, error=str(e))
         finally:
             self._tts_target_speaker_id = prev_tts_target
@@ -1913,7 +1913,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
 
         source = self._source
         if source is None:
-            log.warning("mate_voice: TTS atlandı — yayın kaynağı yok")
+            log.warning("hermes_livekit: TTS atlandı — yayın kaynağı yok")
             self._set_agent_state("idle")
             return
         fmt = None
@@ -1932,7 +1932,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             await self._wait_for_tts_playout(source, samples_pub)
             self._debug("tts_end")
         except asyncio.CancelledError:
-            log.info("mate_voice: TTS iptal (barge-in)")
+            log.info("hermes_livekit: TTS iptal (barge-in)")
             try:
                 source.clear_queue()
             except Exception:
@@ -1940,7 +1940,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             self._set_agent_state("listening")
             raise
         except Exception as e:
-            log.warning("mate_voice: TTS başarısız: %r", e)
+            log.warning("hermes_livekit: TTS başarısız: %r", e)
         # "idle" DEĞİL: Hermes uzun yanıtı birden çok send() çağrısıyla (cümle
         # cümle) gönderebilir. Burada "idle" yapılırsa, parçalar arası LLM
         # bekleme aralığı client'a (WakeCoordinator) inaktivite gibi görünür ve
@@ -2008,7 +2008,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 except TypeError:
                     await lp.send_text(text)
         except Exception as e:
-            log.warning("mate_voice: transcript yayınlanamadı (%s): %r", role, e)
+            log.warning("hermes_livekit: transcript yayınlanamadı (%s): %r", role, e)
 
     def _publish_speaker(self, name, speaker_id, guest: bool) -> None:
         room = self._room
@@ -2082,7 +2082,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             try:
                 await room.local_participant.set_attributes({"lk.agent.state": state})
             except Exception as e:
-                log.warning("mate_voice: agent-state ayarlanamadı (%s): %r", state, e)
+                log.warning("hermes_livekit: agent-state ayarlanamadı (%s): %r", state, e)
 
         try:
             asyncio.create_task(_apply())
@@ -2111,7 +2111,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self, chat_id: str, image_url: str, caption: Optional[str] = None,
         reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        return SendResult(success=False, error="mate_voice: image delivery unsupported")
+        return SendResult(success=False, error="hermes_livekit: image delivery unsupported")
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"name": self.room_name, "type": "dm", "chat_id": chat_id}
@@ -2229,17 +2229,17 @@ def check_requirements() -> bool:
     if not _livekit_configured():
         if _auto_setup_pending():
             logger.info(
-                "mate_voice: LiveKit yapılandırılmamış (LIVEKIT_MODE=yeni) — "
+                "hermes_livekit: LiveKit yapılandırılmamış (LIVEKIT_MODE=yeni) — "
                 "ilk başlatmada OTOMATİK kurulacak, ek komut gerekmez")
         else:
             logger.warning(
-                "mate_voice: LIVEKIT_MODE=var ama LiveKit bilgileri boş — "
-                "mevcut sunucu bilgilerini gir: hermes mate_voice reconfigure")
+                "hermes_livekit: LIVEKIT_MODE=var ama LiveKit bilgileri boş — "
+                "mevcut sunucu bilgilerini gir: hermes hermes_livekit reconfigure")
     try:
         import livekit  # noqa: F401
         return True
     except Exception:
-        logger.warning("mate_voice: livekit not importable — connect() will fail")
+        logger.warning("hermes_livekit: livekit not importable — connect() will fail")
         return True
 
 
@@ -2252,7 +2252,7 @@ def is_connected(config) -> bool:
 
 
 def interactive_setup() -> None:
-    """Configure mate_voice from the central Hermes setup flow."""
+    """Configure Hermes LiveKit from the central Hermes setup flow."""
     from hermes_cli.config import get_env_value, save_env_value
     from hermes_cli.cli_output import (
         print_info,
@@ -2262,7 +2262,7 @@ def interactive_setup() -> None:
         prompt_yes_no,
     )
 
-    print_info("Mate Voice uses LiveKit for audio, plus STT and VOX services.")
+    print_info("Hermes LiveKit uses LiveKit for audio, plus STT and VOX services.")
     print_info("Leave LiveKit as a new local install unless you already have a server.")
     print()
 
@@ -2314,12 +2314,12 @@ def interactive_setup() -> None:
         save_env_value("MATE_LIVEKIT_ROOM", room.strip())
 
     print()
-    print_success("Mate Voice configuration saved to ~/.hermes/.env")
+    print_success("Hermes LiveKit configuration saved to ~/.hermes/.env")
     if use_existing:
         print_info("Restart the gateway: hermes gateway restart")
     else:
-        print_info("Restart the gateway; Mate Voice will install/configure LiveKit on first start.")
-    print_info("Pair a client later with: hermes mate_voice pair-qr")
+        print_info("Restart the gateway; Hermes LiveKit will install/configure LiveKit on first start.")
+    print_info("Pair a client later with: hermes hermes_livekit pair-qr")
 
 
 def _env_enablement() -> Optional[dict]:
@@ -2338,7 +2338,7 @@ def register(ctx) -> None:
     """Plugin entry point: called by the Hermes plugin system."""
     ctx.register_platform(
         name=PLATFORM_NAME,
-        label="Mate Voice (LiveKit)",
+        label="Hermes LiveKit",
         adapter_factory=lambda cfg: MateVoiceAdapter(cfg),
         check_fn=check_requirements,
         validate_config=validate_config,
@@ -2365,21 +2365,21 @@ def register(ctx) -> None:
     if register_tool is not None:
         try:
             register_tool(
-                name="approve_pairing", toolset="mate_voice",
+                name="approve_pairing", toolset="hermes_livekit",
                 schema=APPROVE_PAIRING_SCHEMA, handler=_handle_approve_pairing,
                 emoji="🔗",
             )
             register_tool(
-                name="deny_pairing", toolset="mate_voice",
+                name="deny_pairing", toolset="hermes_livekit",
                 schema=DENY_PAIRING_SCHEMA, handler=_handle_deny_pairing,
                 emoji="⛔",
             )
         except Exception as e:
-            logger.warning("mate_voice: pairing tool kaydı başarısız: %r", e)
+            logger.warning("hermes_livekit: pairing tool kaydı başarısız: %r", e)
     else:
-        logger.warning("mate_voice: ctx.register_tool yok — pairing tool'ları atlandı")
+        logger.warning("hermes_livekit: ctx.register_tool yok — pairing tool'ları atlandı")
 
-    # CLI: `hermes mate_voice reconfigure` — re-enter connection settings.
+    # CLI: `hermes hermes_livekit reconfigure` — re-enter connection settings.
     # Registration is optional; older Hermes builds may lack the hook.
     register_cli = getattr(ctx, "register_cli_command", None)
     if register_cli is not None:
@@ -2419,8 +2419,8 @@ def register(ctx) -> None:
             return run_reconfigure(args)
 
         register_cli(
-            "mate_voice",
-            "mate_voice ses eklentisi komutları (reconfigure, show-key, check-update, clear-database)",
+            "hermes_livekit",
+            "hermes_livekit ses eklentisi komutları (reconfigure, show-key, check-update, clear-database)",
             _setup,
             _handler,
         )

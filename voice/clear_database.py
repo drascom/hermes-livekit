@@ -1,4 +1,4 @@
-"""Clear mate_voice speaker database without requiring the sqlite3 CLI."""
+"""Clear hermes_livekit speaker database without requiring the sqlite3 CLI."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _clear_database(path: Path) -> tuple[int, int]:
 
 def run_clear_database(args=None) -> int:
     path = _db_path()
-    print(f"mate_voice speaker DB: {path}")
+    print(f"hermes_livekit speaker DB: {path}")
     answer = input("Tüm kayıtlı sesleri silmek istiyor musunuz? [yes/no]: ").strip().casefold()
     if answer not in {"e", "evet", "y", "yes"}:
         print("İptal edildi.")

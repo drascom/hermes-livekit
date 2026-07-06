@@ -1,6 +1,6 @@
 """Plugin-local speaker (voice-ID) deposu — stdlib sqlite3, brain'den bağımsız.
 
-`mate-brain/brain/db.py`'deki speakers + speaker_samples tablolarını mate_voice
+`mate-brain/brain/db.py`'deki speakers + speaker_samples tablolarını hermes_livekit
 plugin'ine PORT eder (Hermes çekirdeğine DOKUNMADAN; bkz. candan-voice-plugin-only).
 Embedding'ler ham float32 little-endian BLOB; centroid/eşleştirme bellekte
 `voice/speaker.py::SpeakerID`'de yapılır. `all_speaker_embeddings()` çıktısı

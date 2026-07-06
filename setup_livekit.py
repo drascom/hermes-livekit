@@ -1,12 +1,12 @@
-"""Opsiyonel yerel LiveKit sunucu kurulumu — mate_voice setup CLI.
+"""Opsiyonel yerel LiveKit sunucu kurulumu — Hermes LiveKit setup CLI.
 
-`hermes plugins install mate_voice` yapan birinin LiveKit'i ayrıca kurması
+`hermes plugins install drascom/hermes-livekit` yapan birinin LiveKit'i ayrıca kurması
 gerekmesin diye: binary indir + key/secret üret + minimal config + systemd
 unit + plugin .env güncelle. Idempotent: mevcut kurulum/değer varsa ÜZERİNE
 YAZMAZ (--force ile ezilir).
 
 Kullanım (sunucuda):
-    python3 ~/.hermes/plugins/mate_voice/setup_livekit.py [seçenekler]
+    python3 ~/.hermes/plugins/hermes_livekit/setup_livekit.py [seçenekler]
 
 Argümansız (veya --wizard ile) çalıştırılınca İNTERAKTİF SİHİRBAZ açılır:
 "Mevcut bir LiveKit sunucun var mı, yoksa yeni kurayım mı?" — "yeni kur" ise
@@ -136,7 +136,7 @@ def render_config(bind: str, ip: str, key: str, secret: str) -> str:
     # (dış erişim yok) modlarında kapalı tutulur.
     ext = "false" if bind in ("loopback", "mesh") else "true"
     return (
-        "# mate_voice setup_livekit.py tarafından üretildi\n"
+        "# hermes_livekit setup_livekit.py tarafından üretildi\n"
         f"port: {PORT_WS}\n"
         f"{bind_lines}"
         "rtc:\n"
@@ -151,7 +151,7 @@ def render_config(bind: str, ip: str, key: str, secret: str) -> str:
 def render_unit(prefix: str, user: str) -> str:
     return (
         "[Unit]\n"
-        "Description=LiveKit Server (mate_voice)\n"
+        "Description=LiveKit Server (Hermes LiveKit)\n"
         "After=network-online.target\n"
         "Wants=network-online.target\n\n"
         "[Service]\n"
@@ -299,8 +299,8 @@ def run_wizard(a) -> int | None:
     None = 'yeni kur' seçildi, a.bind/a.ip dolduruldu, normal akış devam etsin."""
     import getpass
 
-    print("mate_voice — LiveKit sihirbazı")
-    print("Mate Voice'un bir LiveKit sunucusuna ihtiyacı var.\n")
+    print("Hermes LiveKit — LiveKit sihirbazı")
+    print("Hermes LiveKit'in bir LiveKit sunucusuna ihtiyacı var.\n")
     ans = input("Mevcut bir LiveKit sunucun var mı, yoksa yeni kurayım mı?\n"
                 "  [Y]eni kur (öneri, otomatik)  /  [m]evcut var: ").strip().lower()
 
@@ -354,7 +354,7 @@ def run_install(a) -> int:
     is_linux = platform.system() == "Linux"
     dry = a.dry_run
 
-    log(f"mate_voice LiveKit kurulumu — bind={a.bind} prefix={prefix}"
+    log(f"Hermes LiveKit kurulumu — bind={a.bind} prefix={prefix}"
         + (" [DRY-RUN]" if dry else ""))
 
     # 1) Binary

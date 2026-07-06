@@ -17,7 +17,7 @@ import logging
 import subprocess
 import sys
 
-log = logging.getLogger("mate_voice._deps")
+log = logging.getLogger("hermes_livekit._deps")
 
 # import-edilen modül adı → pip paket spec'i
 _PIP_SPEC = {
@@ -66,23 +66,23 @@ def _ensure_pip() -> None:
                        capture_output=True, text=True, timeout=300)
         importlib.invalidate_caches()
     except Exception as e:
-        log.warning("mate_voice: ensurepip başarısız: %r", e)
+        log.warning("hermes_livekit: ensurepip başarısız: %r", e)
 
 
 def _pip_install(specs: list[str], timeout: int = 900) -> bool:
     _ensure_pip()
     cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *specs]
-    log.warning("mate_voice: eksik deps kuruluyor (%s) → %s", specs, sys.executable)
+    log.warning("hermes_livekit: eksik deps kuruluyor (%s) → %s", specs, sys.executable)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except Exception as e:
-        log.warning("mate_voice: pip install çağrılamadı: %r", e)
+        log.warning("hermes_livekit: pip install çağrılamadı: %r", e)
         return False
     if r.returncode != 0:
-        log.warning("mate_voice: pip install başarısız (rc=%s): %s",
+        log.warning("hermes_livekit: pip install başarısız (rc=%s): %s",
                     r.returncode, (r.stderr or r.stdout or "")[-800:])
         return False
-    log.info("mate_voice: deps kuruldu: %s", specs)
+    log.info("hermes_livekit: deps kuruldu: %s", specs)
     importlib.invalidate_caches()
     return True
 

@@ -5,9 +5,9 @@ linkini + terminal QR'ını basar. Client QR'ı okuyup GET /pair/claim?ticket=..
 ile config paketini onaysız alır (ticket'a sahip olmak yetkidir; TTL 10 dk).
 
 Kullanım (sunucuda):
-    hermes mate_voice pair-qr                            # Hermes CLI üzerinden
-    python3 ~/.hermes/plugins/mate_voice/pair_qr.py      # standalone (hafif, ses deps'siz)
-    (cd ~/.hermes/plugins && python3 -m mate_voice.pair_qr)  # paket importu
+    hermes hermes_livekit pair-qr                            # Hermes CLI üzerinden
+    python3 ~/.hermes/plugins/hermes_livekit/pair_qr.py      # standalone (hafif, ses deps'siz)
+    (cd ~/.hermes/plugins && python3 -m hermes_livekit.pair_qr)  # paket importu
 """
 
 from __future__ import annotations

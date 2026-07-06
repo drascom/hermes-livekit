@@ -1,6 +1,6 @@
-# mate_voice — İstemci Entegrasyon Sözleşmesi
+# hermes_livekit — İstemci Entegrasyon Sözleşmesi
 
-Bir istemci (mate-mac veya başka) Hermes `mate_voice` plugin'in LiveKit odasına
+Bir istemci (mate-mac veya başka) Hermes `hermes_livekit` plugin'in LiveKit odasına
 **brain'den bağımsız** bağlanır. LiveKit API secret SUNUCUDA kalır; istemci
 paylaşılan-anahtarlı token endpoint'ten room-scoped bir join token alır.
 
@@ -76,7 +76,7 @@ gibi). Aksi halde aynı ağdan / SSH tüneli ile erişilir:
 `ssh -L 8830:localhost:8830 your-server` → `http://localhost:8830/mate/token`.
 
 ## 6. "Başkası kendi Hermes'ine nasıl bağlar"
-1. `mate_voice` plugin'i `~/.hermes/plugins/`'e koy, `plugins.enabled`'a ekle.
+1. `hermes_livekit` plugin'i `~/.hermes/plugins/`'e koy, `plugins.enabled`'a ekle.
 2. LiveKit sunucun yoksa: `python3 setup_livekit.py --bind mesh --ip <mesh-ip>` —
    binary+config+systemd+key üretir ve plugin `.env`'ine `LIVEKIT_URL/API_KEY/API_SECRET`
    yazar (bkz. README "LiveKit sunucusunu plugin ile kurma"). Varsa bu adımı atla.
@@ -94,7 +94,7 @@ Client tek adres girer: `https://mate-token.drascom.uk` (proxy → :8830 aiohttp
 - `GET /pair/status?pair_id=<id>` → `{status: pending|approved|denied|expired, config?}`.
   `approved` olduğunda `config` **TEK SEFER** döner; ikinci istekte `expired`.
 - `GET /pair/claim?ticket=<t>` → tek kullanımlık QR ticket ile onaysız `200 {config}`.
-  Ticket sunucuda üretilir: `hermes mate_voice pair-qr` veya
-  `python3 ~/.hermes/plugins/mate_voice/pair_qr.py` (terminale QR + link basar).
+  Ticket sunucuda üretilir: `hermes hermes_livekit pair-qr` veya
+  `python3 ~/.hermes/plugins/hermes_livekit/pair_qr.py` (terminale QR + link basar).
 - `config` paketi: `{livekit_url, room, token_endpoint, client_key, gateway_url, gateway_token}`
   — `gateway_token` sunucudaki `~/.hermes/mate_gateway_token` dosyasından okunur.

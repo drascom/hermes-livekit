@@ -1,8 +1,8 @@
-"""Self-update version check for mate_voice.
+"""Self-update version check for Hermes LiveKit.
 
 The plugin lives in its own git repo (`drascom/hermes-livekit`), installed at the
 repo root, so the installed copy has a `.git` directory and standard
-`hermes plugins update mate_voice` (git-pull) refreshes it in place.
+`hermes plugins update hermes_livekit` (git-pull) refreshes it in place.
 
 This module compares the local `plugin.yaml` version against upstream and powers
 the manual `check-update` CLI action, including the interactive update/restart
@@ -24,7 +24,7 @@ import yaml
 log = logging.getLogger(__name__)
 
 PLUGIN_IDENTIFIER = "drascom/hermes-livekit"
-_PLUGIN_NAME = "mate_voice"
+_PLUGIN_NAME = "hermes_livekit"
 _MANIFEST_RAW_URL = (
     "https://raw.githubusercontent.com/drascom/hermes-livekit/main/plugin.yaml"
 )
@@ -94,7 +94,7 @@ def _fetch_remote_version_sync() -> Optional[str]:
             version = str(data.get("version") or "")
             return version or None
     except Exception as e:
-        log.warning("mate_voice: güncelleme kontrolü başarısız: %r", e)
+        log.warning("hermes_livekit: güncelleme kontrolü başarısız: %r", e)
         return None
 
 
@@ -128,9 +128,9 @@ def run_install_force() -> tuple[bool, str]:
         restored, errors = _restore_local_state(preserved)
         if restored:
             names = ", ".join(str(path) for path in restored)
-            output += f"\nmate_voice: lokal state korundu: {names}"
+            output += f"\nhermes_livekit: lokal state korundu: {names}"
         for rel_path, error in errors:
-            output += f"\nmate_voice: lokal state geri yazılamadı ({rel_path}): {error!r}"
+            output += f"\nhermes_livekit: lokal state geri yazılamadı ({rel_path}): {error!r}"
         return result.returncode == 0, output
     except Exception as e:
         return False, repr(e)

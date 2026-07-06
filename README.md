@@ -1,6 +1,6 @@
-# Mate Voice for Hermes
+# Hermes LiveKit for Hermes (LiveKit voice plugin)
 
-Mate Voice is a Hermes plugin that adds a live voice channel through LiveKit.
+Hermes LiveKit is a Hermes plugin that adds a live voice channel through LiveKit.
 You speak to a Mate client, Hermes listens, and the reply is spoken back.
 
 ## Install
@@ -13,7 +13,7 @@ hermes gateway restart
 To update later:
 
 ```bash
-hermes plugins update mate_voice
+hermes plugins update hermes_livekit
 hermes gateway restart
 ```
 
@@ -25,13 +25,13 @@ Run the Hermes gateway setup flow:
 hermes setup gateway
 ```
 
-Choose **Mate Voice (LiveKit)** and enter:
+Choose **Hermes LiveKit** and enter:
 
-- Whether Mate Voice should install a new LiveKit server or use an existing one
+- Whether Hermes LiveKit should install a new LiveKit server or use an existing one
 - `STT_HOST` and `STT_PORT` for Whisper STT
 - `VOX_HOST` and `VOX_PORT` for VOX TTS
 
-If you choose a new LiveKit server, Mate Voice installs and configures it on
+If you choose a new LiveKit server, Hermes LiveKit installs and configures it on
 the first gateway start.
 
 If you already have LiveKit, enter the LiveKit URL, API key, and API secret.
@@ -41,7 +41,7 @@ If you already have LiveKit, enter the LiveKit URL, API key, and API secret.
 After the gateway is running:
 
 ```bash
-hermes mate_voice pair-qr
+hermes hermes_livekit pair-qr
 ```
 
 Scan the QR code or open the link in the Mate client. Pairing sends the client
@@ -50,16 +50,16 @@ everything it needs: LiveKit URL, room, client key, and gateway address.
 ## Change settings
 
 ```bash
-hermes mate_voice reconfigure
+hermes hermes_livekit reconfigure
 hermes gateway restart
 ```
 
 Useful commands:
 
 ```bash
-hermes mate_voice pair-qr       # pair a client
-hermes mate_voice show-key      # show the client key
-hermes mate_voice check-update  # check for plugin updates
+hermes hermes_livekit pair-qr       # pair a client
+hermes hermes_livekit show-key      # show the client key
+hermes hermes_livekit check-update  # check for plugin updates
 ```
 
 ## Firewall
@@ -69,12 +69,12 @@ If clients connect from outside the server, open:
 - `7880/tcp` for LiveKit signaling
 - `7881/tcp` for LiveKit TCP fallback
 - `7882/udp` for LiveKit media
-- `8830/tcp` for Mate Voice pairing and tokens
+- `8830/tcp` for Hermes LiveKit pairing and tokens
 - `8800/tcp` for the Hermes gateway
 
 ## Related components
 
-Mate Voice expects separate STT and TTS services:
+Hermes LiveKit expects separate STT and TTS services:
 
 - Whisper STT, configured with `STT_HOST` and `STT_PORT`
 - VOX TTS, configured with `VOX_HOST` and `VOX_PORT`

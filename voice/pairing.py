@@ -1,9 +1,9 @@
-"""Tek-URL pairing — store + config paketi (mate_voice, stdlib-only).
+"""Tek-URL pairing — store + config paketi (hermes_livekit, stdlib-only).
 
 Client tek adres girer (https://mate-token.drascom.uk) → POST /pair/request →
 kısa kod ekranda → kullanıcı HERHANGİ bir Hermes kanalından `approve_pairing`
 tool'u ile onaylar → client GET /pair/status ile config paketini TEK SEFER alır.
-Alternatif: sunucuda `pair_qr.py` (veya `hermes mate_voice pair-qr`) tek
+Alternatif: sunucuda `pair_qr.py` (veya `hermes hermes_livekit pair-qr`) tek
 kullanımlık ticket + QR üretir → client GET /pair/claim?ticket=... ile onaysız
 config alır (ticket'a sahip olmak yetkidir).
 
