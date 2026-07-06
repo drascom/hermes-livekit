@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Reinstall the hermes_livekit (Hermes LiveKit) plugin FROM SCRATCH:
+# Install the hermes_livekit (Hermes LiveKit) plugin FROM SCRATCH
+# (removes any existing install first, so it doubles as a clean reinstall):
 #   1) Remove the plugin           (hermes plugins remove)
 #   2) Strip LiveKit-related keys from ~/.hermes/.env (backed up first)
 #   3) Reinstall the plugin from GitHub main  (hermes plugins install)
