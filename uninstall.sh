@@ -1,40 +1,40 @@
 #!/usr/bin/env bash
-# Hermes LiveKit (hermes_livekit) eklentisini + LiveKit sunucusunu KOMPLE kaldırır.
+# COMPLETELY remove the Hermes LiveKit (hermes_livekit) plugin AND the LiveKit server.
 #
-# NEDEN AYRI SCRIPT: `hermes plugins remove` yalnız plugin KODUNU siler
-# (~/.hermes/plugins/hermes_livekit). LiveKit sunucusu ayrı bir systemd servisi
-# + binary + config + veri olduğu için plugin remove ile KALKMAZ. Hermes
-# çekirdeğinde uninstall-hook yok, bu yüzden teardown'u bu script yapar.
+# WHY A SEPARATE SCRIPT: `hermes plugins remove` deletes only the plugin CODE
+# (~/.hermes/plugins/hermes_livekit). The LiveKit server is a separate systemd
+# service + binary + config + data, so it does NOT come down with plugin remove.
+# Hermes core has no uninstall hook, so this script performs the teardown.
 #
-# Kaldırdıkları:
-#   1) plugin kodu           (hermes plugins remove hermes_livekit)
-#   2) LiveKit systemd servisi + binary + config  (~/.hermes/mate_voice/livekit)
-#   3) .env'deki LiveKit + STT/VOX anahtarları     (önce yedek alır)
-#   4) (opsiyonel, sorar) eşleşme + ses-kimlik verisi (pairing.db / speakers.db)
+# What it removes:
+#   1) plugin code           (hermes plugins remove hermes_livekit)
+#   2) LiveKit systemd service + binary + config  (~/.hermes/mate_voice/livekit)
+#   3) LiveKit + STT/VOX keys in .env             (backed up first)
+#   4) (optional, prompts) pairing + speaker-ID data (pairing.db / speakers.db)
 set -euo pipefail
 
 ENV_FILE="${HERMES_HOME:-$HOME/.hermes}/.env"
-DATA_DIR="${HERMES_HOME:-$HOME/.hermes}/mate_voice"     # veri dizini (rename'de korunur)
+DATA_DIR="${HERMES_HOME:-$HOME/.hermes}/mate_voice"     # data dir (kept across the rename)
 LK_DIR="$DATA_DIR/livekit"
 UNIT=/etc/systemd/system/livekit-server.service
 PLUGIN="hermes_livekit"
 TTYIN=/dev/tty; [ -e /dev/tty ] || TTYIN=/dev/null
 
-echo "==> 1) Plugin kaldırılıyor: $PLUGIN"
-hermes plugins remove "$PLUGIN" < "$TTYIN" || echo "   (kurulu değil — atlanıyor)"
+echo "==> 1) Removing plugin: $PLUGIN"
+hermes plugins remove "$PLUGIN" < "$TTYIN" || echo "   (not installed - skipping)"
 
-echo "==> 2) LiveKit servisi + dosyaları kaldırılıyor"
+echo "==> 2) Removing LiveKit service + files"
 if systemctl list-unit-files 2>/dev/null | grep -q "^livekit-server.service"; then
   sudo systemctl disable --now livekit-server 2>/dev/null || true
   sudo rm -f "$UNIT"
   sudo systemctl daemon-reload
-  echo "   servis durduruldu + kaldırıldı"
+  echo "   service stopped + removed"
 else
-  echo "   livekit-server servisi yok — atlanıyor"
+  echo "   livekit-server service not present - skipping"
 fi
-rm -rf "$LK_DIR" && echo "   $LK_DIR silindi" || true
+rm -rf "$LK_DIR" && echo "   deleted $LK_DIR" || true
 
-echo "==> 3) .env temizleniyor: $ENV_FILE"
+echo "==> 3) Cleaning .env: $ENV_FILE"
 if [ -f "$ENV_FILE" ]; then
   cp "$ENV_FILE" "$ENV_FILE.bak.$(date +%Y%m%d_%H%M%S)"
   for key in LIVEKIT_MODE LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET \
@@ -42,16 +42,16 @@ if [ -f "$ENV_FILE" ]; then
              MATE_VOICE_CLIENT_KEY STT_HOST STT_PORT VOX_HOST VOX_PORT; do
     sed -i "/^[[:space:]]*${key}=/d" "$ENV_FILE"
   done
-  echo "   LiveKit + STT/VOX anahtarları silindi (yedek alındı)"
+  echo "   removed LiveKit + STT/VOX keys (backed up)"
 fi
 
-echo "==> 4) Eşleşme + ses-kimlik verisi (pairing.db / speakers.db) de silinsin mi?"
-read -r -p "   Sil? [e/H]: " ans < "$TTYIN" || ans=""
+echo "==> 4) Also delete pairing + speaker-ID data (pairing.db / speakers.db)?"
+read -r -p "   Delete? [y/N]: " ans < "$TTYIN" || ans=""
 case "$ans" in
-  e|E|y|Y) rm -f "$DATA_DIR/pairing.db" "$DATA_DIR/speakers.db"; echo "   veri silindi" ;;
-  *) echo "   veri korundu ($DATA_DIR)" ;;
+  y|Y) rm -f "$DATA_DIR/pairing.db" "$DATA_DIR/speakers.db"; echo "   data deleted" ;;
+  *) echo "   data kept ($DATA_DIR)" ;;
 esac
 
 echo
-echo "✓ Hermes LiveKit tamamen kaldırıldı."
-echo "  Gateway'i tazelemek istersen: hermes gateway restart"
+echo "✓ Hermes LiveKit completely removed."
+echo "  To refresh the gateway: hermes gateway restart"

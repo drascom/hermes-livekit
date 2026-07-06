@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# hermes_livekit (Hermes LiveKit / LiveKit) plugin'ini SIFIRDAN kurar:
-#   1) Plugin'i kaldır            (hermes plugins remove)
-#   2) ~/.hermes/.env'den LiveKit ile ilgili satırları temizle (önce yedek alır)
-#   3) Plugin'i GitHub main'den yeniden kur  (hermes plugins install)
+# Reinstall the hermes_livekit (Hermes LiveKit) plugin FROM SCRATCH:
+#   1) Remove the plugin           (hermes plugins remove)
+#   2) Strip LiveKit-related keys from ~/.hermes/.env (backed up first)
+#   3) Reinstall the plugin from GitHub main  (hermes plugins install)
 #
-# Kurulumdan sonra yapılandırma:
-#   hermes setup                 # "Hermes LiveKit" → LiveKit modu / STT / VOX / oda
+# Configure after installing:
+#   hermes setup gateway             # "Hermes LiveKit" -> LiveKit mode / STT / VOX / room
 #   hermes gateway restart
-#   hermes hermes_livekit pair-qr    # client eşleştir
+#   hermes hermes_livekit pair-qr    # pair a client
 #
-# NOT: `curl ... | bash` altında script'in kendisi stdin'dedir; interaktif
-# hermes promptu bunu "cevap" sanıp otomatik geçerdi. Bu yüzden interaktif
-# hermes komutlarının stdin'ini gerçek terminale (/dev/tty) yönlendiririz —
-# SADECE o komuta (tüm shell'e DEĞİL; yoksa bash script'i terminalden okumaya
-# çalışıp bozulur). Terminal yoksa /dev/null → promptlar temiz atlanır.
+# NOTE: Under `curl ... | bash` the script itself is on stdin, so an interactive
+# hermes prompt would read the script's own lines as "answers" and auto-skip.
+# We therefore redirect stdin to the real terminal (/dev/tty) ONLY for the
+# interactive hermes commands (not the whole shell — that would make bash read
+# the rest of the script from the terminal and break it). No terminal -> /dev/null
+# so prompts are cleanly skipped.
 set -euo pipefail
 
 ENV_FILE="${HERMES_HOME:-$HOME/.hermes}/.env"
@@ -21,7 +22,7 @@ TTYIN=/dev/tty; [ -e /dev/tty ] || TTYIN=/dev/null
 REPO="drascom/hermes-livekit"
 PLUGIN="hermes_livekit"
 
-# .env'den silinecek hermes_livekit (LiveKit + STT/VOX) anahtarları.
+# hermes_livekit (LiveKit + STT/VOX) keys to remove from .env.
 KEYS=(
   LIVEKIT_MODE
   LIVEKIT_URL
@@ -35,27 +36,27 @@ KEYS=(
   VOX_PORT
 )
 
-echo "==> 1) Plugin kaldırılıyor: $PLUGIN"
-hermes plugins remove "$PLUGIN" < "$TTYIN" || echo "   (kurulu değil — atlanıyor)"
+echo "==> 1) Removing plugin: $PLUGIN"
+hermes plugins remove "$PLUGIN" < "$TTYIN" || echo "   (not installed - skipping)"
 
-echo "==> 2) .env temizleniyor: $ENV_FILE"
+echo "==> 2) Cleaning .env: $ENV_FILE"
 if [ -f "$ENV_FILE" ]; then
   backup="$ENV_FILE.bak.$(date +%Y%m%d_%H%M%S)"
   cp "$ENV_FILE" "$backup"
-  echo "   yedek: $backup"
+  echo "   backup: $backup"
   for key in "${KEYS[@]}"; do
     sed -i "/^[[:space:]]*${key}=/d" "$ENV_FILE"
   done
-  echo "   silinen anahtarlar: ${KEYS[*]}"
+  echo "   removed keys: ${KEYS[*]}"
 else
-  echo "   .env bulunamadı — atlanıyor"
+  echo "   .env not found - skipping"
 fi
 
-echo "==> 3) Plugin yeniden kuruluyor: $REPO"
+echo "==> 3) Reinstalling plugin: $REPO"
 hermes plugins install "$REPO" < "$TTYIN"
 
 echo
-echo "✓ Bitti. Sıradaki adımlar:"
-echo "   hermes setup                 # Hermes LiveKit → LiveKit modu / STT / VOX / oda"
+echo "✓ Done. Next steps:"
+echo "   hermes setup gateway             # Hermes LiveKit -> LiveKit mode / STT / VOX / room"
 echo "   hermes gateway restart"
-echo "   hermes hermes_livekit pair-qr    # client eşleştir"
+echo "   hermes hermes_livekit pair-qr    # pair a client"
