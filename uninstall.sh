@@ -14,6 +14,7 @@
 set -euo pipefail
 
 ENV_FILE="${HERMES_HOME:-$HOME/.hermes}/.env"
+CONFIG_YAML="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
 DATA_DIR="${HERMES_HOME:-$HOME/.hermes}/mate_voice"     # data dir (kept across the rename)
 LK_DIR="$DATA_DIR/livekit"
 UNIT=/etc/systemd/system/livekit-server.service
@@ -22,6 +23,15 @@ TTYIN=/dev/tty; [ -e /dev/tty ] || TTYIN=/dev/null
 
 echo "==> 1) Removing plugin: $PLUGIN"
 hermes plugins remove "$PLUGIN" < "$TTYIN" || echo "   (not installed - skipping)"
+
+# `hermes plugins remove` deletes the code but leaves the name in
+# config.yaml `plugins.enabled` -> the gateway then tries to load a plugin whose
+# dir is gone (ModuleNotFoundError). Strip the enabled entry so removal is clean.
+if [ -f "$CONFIG_YAML" ] && grep -qE "^[[:space:]]*-[[:space:]]*${PLUGIN}[[:space:]]*\$" "$CONFIG_YAML"; then
+  cp "$CONFIG_YAML" "$CONFIG_YAML.bak.$(date +%Y%m%d_%H%M%S)"
+  sed -i "/^[[:space:]]*-[[:space:]]*${PLUGIN}[[:space:]]*\$/d" "$CONFIG_YAML"
+  echo "   removed '$PLUGIN' from config.yaml plugins.enabled"
+fi
 
 echo "==> 2) Removing LiveKit service + files"
 if systemctl list-unit-files 2>/dev/null | grep -q "^livekit-server.service"; then
