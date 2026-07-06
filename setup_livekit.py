@@ -128,9 +128,13 @@ def render_config(bind: str, ip: str, key: str, secret: str) -> str:
         bind_lines = f"bind_addresses:\n  - 127.0.0.1\n  - {ip}\n"
     else:  # all (varsayılan) / public — tüm arayüzler
         bind_lines = "bind_addresses:\n  - 0.0.0.0\n"
-    # Yalnız "public" (NAT arkası, dışarı açık sunucu) external-IP keşfi yapar;
-    # "all" düz IP/LAN kurulumudur — client sunucuya ulaştığı adresten bağlanır.
-    ext = "true" if bind == "public" else "false"
+    # external-IP (STUN) keşfi: 0.0.0.0'a bağlanan ("all"/"public") kurulumlar NAT
+    # arkasında olabilir (Oracle Cloud gibi 1:1 NAT) → public IP'yi ICE adayı olarak
+    # yayınlamak ŞART; yoksa uzak client sinyalde bağlanır ama medya (UDP) kurulamaz →
+    # ~10sn'de bir "removing participant without connection" reconnect döngüsü.
+    # STUN LAN'da da zararsız (aynı IP'yi bulur/ICE yereli seçer). Sadece loopback/mesh
+    # (dış erişim yok) modlarında kapalı tutulur.
+    ext = "false" if bind in ("loopback", "mesh") else "true"
     return (
         "# mate_voice setup_livekit.py tarafından üretildi\n"
         f"port: {PORT_WS}\n"

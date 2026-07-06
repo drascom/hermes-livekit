@@ -2251,6 +2251,77 @@ def is_connected(config) -> bool:
     return _livekit_configured() or _auto_setup_pending()
 
 
+def interactive_setup() -> None:
+    """Configure mate_voice from the central Hermes setup flow."""
+    from hermes_cli.config import get_env_value, save_env_value
+    from hermes_cli.cli_output import (
+        print_info,
+        print_success,
+        print_warning,
+        prompt,
+        prompt_yes_no,
+    )
+
+    print_info("Mate Voice uses LiveKit for audio, plus STT and VOX services.")
+    print_info("Leave LiveKit as a new local install unless you already have a server.")
+    print()
+
+    current_mode = (get_env_value("LIVEKIT_MODE") or "yeni").strip().lower()
+    has_existing = current_mode in {"var", "mevcut", "existing"}
+    use_existing = prompt_yes_no("Use an existing LiveKit server?", has_existing)
+    mode = "var" if use_existing else "yeni"
+    save_env_value("LIVEKIT_MODE", mode)
+
+    if use_existing:
+        for key, label, secret in (
+            ("LIVEKIT_URL", "LiveKit URL (ws://... or wss://...)", False),
+            ("LIVEKIT_API_KEY", "LiveKit API key", False),
+            ("LIVEKIT_API_SECRET", "LiveKit API secret", True),
+        ):
+            value = prompt(label, default=get_env_value(key) or "", password=secret)
+            if not value:
+                print_warning(f"{key} is required for an existing LiveKit server.")
+                return
+            save_env_value(key, value.strip())
+    else:
+        print_info("LiveKit will be installed automatically on the first gateway start.")
+
+    for key, label, default in (
+        ("STT_HOST", "STT host", get_env_value("STT_HOST") or ""),
+        ("STT_PORT", "STT port", get_env_value("STT_PORT") or "10300"),
+        ("VOX_HOST", "VOX host", get_env_value("VOX_HOST") or ""),
+        ("VOX_PORT", "VOX port", get_env_value("VOX_PORT") or "8808"),
+    ):
+        value = prompt(label, default=default)
+        if not value and key.endswith("_HOST"):
+            print_warning(f"{key} is required.")
+            return
+        if value:
+            save_env_value(key, value.strip())
+
+    public_livekit = prompt(
+        "Public LiveKit URL for clients (optional)",
+        default=get_env_value("MATE_PUBLIC_LIVEKIT_URL") or "",
+    )
+    if public_livekit:
+        save_env_value("MATE_PUBLIC_LIVEKIT_URL", public_livekit.strip())
+
+    room = prompt(
+        "LiveKit room",
+        default=get_env_value("MATE_LIVEKIT_ROOM") or "mate-hermes-test",
+    )
+    if room:
+        save_env_value("MATE_LIVEKIT_ROOM", room.strip())
+
+    print()
+    print_success("Mate Voice configuration saved to ~/.hermes/.env")
+    if use_existing:
+        print_info("Restart the gateway: hermes gateway restart")
+    else:
+        print_info("Restart the gateway; Mate Voice will install/configure LiveKit on first start.")
+    print_info("Pair a client later with: hermes mate_voice pair-qr")
+
+
 def _env_enablement() -> Optional[dict]:
     if not ((os.getenv("LIVEKIT_URL") and os.getenv("LIVEKIT_API_SECRET"))
             or _auto_setup_pending()):
@@ -2267,13 +2338,14 @@ def register(ctx) -> None:
     """Plugin entry point: called by the Hermes plugin system."""
     ctx.register_platform(
         name=PLATFORM_NAME,
-        label="LiveKit Voice",
+        label="Mate Voice (LiveKit)",
         adapter_factory=lambda cfg: MateVoiceAdapter(cfg),
         check_fn=check_requirements,
         validate_config=validate_config,
         is_connected=is_connected,
-        required_env=["LIVEKIT_URL", "LIVEKIT_API_SECRET"],
+        required_env=["LIVEKIT_MODE", "STT_HOST", "STT_PORT", "VOX_HOST", "VOX_PORT"],
         install_hint="Needs livekit + numpy + onnxruntime + sherpa_onnx + transformers + wyoming",
+        setup_fn=interactive_setup,
         env_enablement_fn=_env_enablement,
         cron_deliver_env_var="MATE_HOME_CHANNEL",
         allow_all_env="MATE_VOICE_ALLOW_ALL_USERS",
