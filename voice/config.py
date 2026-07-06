@@ -204,6 +204,9 @@ class _Settings:
         self.speaker_margin = _f("SPEAKER_MARGIN", 0.05)
         self.speaker_min_seconds = _f("SPEAKER_MIN_SECONDS", 1.0)
         self.speaker_enroll_min_seconds = _f("SPEAKER_ENROLL_MIN_SECONDS", 4.0)
+        # Oto-onboarding: bağlantıda ilk BİLİNMEYEN ses duyulunca bir kez
+        # "seni tanımıyorum, adın ne?" diye sorup enroll ak. Ret → sessiz guest.
+        self.onboarding_enabled = _b("ONBOARDING_ENABLED", True)
         self.barge_in_speaker_gate = _b("BARGE_IN_SPEAKER_GATE", True)
         self.barge_in_speaker_min_seconds = _f("BARGE_IN_SPEAKER_MIN_SECONDS", 0.6)
         self.barge_in_speaker_threshold = _f("BARGE_IN_SPEAKER_THRESHOLD", self.speaker_threshold)

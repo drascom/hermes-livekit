@@ -215,6 +215,22 @@ def _is_enroll_command(text: str) -> bool:
     return any(p in low for p in _ENROLL_PHRASES)
 
 
+# Onboarding/enroll sorusuna ret — isim sorulunca bunlardan biri gelirse akış
+# sessizce iptal (kullanıcı tanıtılmak istemiyor). Kısa söz olmalı; uzun cümlede
+# tesadüfi geçiş tetiklemesin (isim "hayırcan" gibi başlayabilir).
+_DECLINE_PHRASES = (
+    "istemiyorum", "gerek yok", "gerekmiyor", "hayır", "hayir", "yok",
+    "sonra", "şimdi değil", "simdi degil", "boş ver", "bos ver", "vazgeç",
+    "no", "not now", "maybe later", "leave it", "skip",
+)
+def _is_decline_enroll(text: str) -> bool:
+    low = re.sub(r"\s+", " ", (text or "").casefold()).strip().rstrip(".!?")
+    if not low or len(low.split()) > 4:
+        return False
+    return any(low == p or low.startswith(p + " ") or low.endswith(" " + p)
+               for p in _DECLINE_PHRASES)
+
+
 class MateVoiceAdapter(BasePlatformAdapter):
     """LiveKit voice adapter. Instantiated by the adapter_factory in register()."""
 
@@ -251,6 +267,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # name_emb?}. stage: ask_name → confirm. Oto-enroll YOK; bilinmeyen ses
         # sessizce guest. None = enrollment akışında değiliz.
         self._pending_enroll: Optional[dict] = None
+        # Oto-onboarding: bu bağlantıda ilk bilinmeyen sese bir kez "adın ne?"
+        # soruldu mu. connect'te sıfırlanır → yeni bağlantıda yine bir kez sorar.
+        # Ret ("istemiyorum"/"boş ver") sonrası da True kalır → aynı bağlantıda
+        # bir daha ısrar etmez (kullanıcı tercihi: sessizce guest).
+        self._onboarding_asked = False
         # Bu bağlantıda zaten "hoş geldin" denmiş speaker_id'ler (bir kez selam).
         # Her connect/reconnect'te sıfırlanır → tekrar bağlanınca yine karşılar.
         self._greeted_speakers: set = set()
@@ -1011,6 +1032,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._attr_cache = {}
         self._awake_state = {}
         self._greeted_speakers = set()
+        self._onboarding_asked = False
         self._barge_in_enabled = True
         self._wake_at = 0.0
 
@@ -1491,6 +1513,19 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     return
                 await self._begin_enrollment(text, emb, participant)
                 return
+            # Oto-onboarding: bağlantıda İLK bilinmeyen ses (speaker_id None) +
+            # geçerli embedding varsa bir kez kim olduğunu sor. Ret/vazgeç →
+            # _onboarding_asked True kalır → aynı bağlantıda tekrar sorulmaz.
+            if (self.settings.onboarding_enabled and not self._onboarding_asked
+                    and speaker_id is None and emb is not None):
+                self._onboarding_asked = True
+                en = self._is_en(self._attrs(participant).get("language"))
+                greet = ("Hi, I don't recognize your voice yet. What's your name?"
+                         if en else
+                         "Merhaba, sesini henüz tanımıyorum. Adın ne?")
+                log.info("hermes_livekit: oto-onboarding — ilk bilinmeyen ses, isim soruluyor")
+                await self._begin_enrollment(text, emb, participant, prompt=greet)
+                return
         self._enqueue_turn(text, speaker, speaker_id, participant, track)
 
     async def _handle_text_input(self, reader, participant) -> None:
@@ -1769,13 +1804,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
         )
         await self._speak(text, self._attrs(participant).get("voice") or None)
 
-    async def _begin_enrollment(self, text, emb, participant) -> None:
-        """1. TUR: açık komut ("beni kaydet") → ismi sor. emb = komut sözünün
-        ses örneği; onaylanırsa örnek olarak yazılır."""
+    async def _begin_enrollment(self, text, emb, participant, *, prompt=None) -> None:
+        """1. TUR: açık komut ("beni kaydet") VEYA oto-onboarding → ismi sor.
+        emb = tetikleyen sözün ses örneği; onaylanırsa örnek olarak yazılır.
+        prompt verilirse onun yerine o cümleyle sorar (onboarding karşılaması)."""
         self._pending_enroll = {"emb": emb, "stage": "ask_name"}
         en = self._is_en(self._attrs(participant).get("language"))
-        ask = "Okay, what's your name?" if en else "Tamam, adın ne?"
-        log.info("hermes_livekit: enrollment (açık komut %r) — isim soruluyor", text[:40])
+        ask = prompt or ("Okay, what's your name?" if en else "Tamam, adın ne?")
+        log.info("hermes_livekit: enrollment (%r) — isim soruluyor", text[:40])
         self._publish_speaker(None, None, guest=True)
         await self._enroll_say(ask, participant)
 
@@ -1794,6 +1830,17 @@ class MateVoiceAdapter(BasePlatformAdapter):
             log.info("hermes_livekit: enrollment onaylanmadı (%r) → iptal", text[:40])
             await self._enroll_say(
                 "Okay, I didn't save it." if en else "Tamam, kaydetmedim.", participant)
+            return
+        # ask_name aşaması: isim yerine ret ("istemiyorum"/"gerek yok"/"sonra")
+        # → sessizce guest kal. _onboarding_asked True kaldığı için bu bağlantıda
+        # bir daha sorulmaz. (Not: "boş ver"/"vazgeç" zaten _is_stop_command ile
+        # daha yukarıda iptal ediliyor.)
+        if _is_decline_enroll(text):
+            self._pending_enroll = None
+            log.info("hermes_livekit: enrollment reddedildi (%r) → sessiz guest", text[:40])
+            await self._enroll_say(
+                "No problem, I'll leave it." if en else "Sorun değil, boş verelim.",
+                participant)
             return
         name = self._parse_name(text)
         if not name:
