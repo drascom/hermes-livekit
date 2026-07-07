@@ -160,6 +160,50 @@ def _classify_system_message(text: str):
         "İstersen numarasını ya da seçeneği söyle.")
     return (t2, True, True)
 
+def _summarize_command(command: str) -> str:
+    """Ham kabuk komutunu, teknik olmayan kullanıcıya TEK cümlelik Türkçe niyet
+    özetine indir ('bir dosyada arama yapmak', 'bir klasöre bakmak', 'bir dosyaya
+    yazmak'...). Onay kartı ham jargon yerine BU özeti gösterir; karta giden bilgi
+    burada elenir. Kural-tabanlı (hızlı/offline); kesin değil ama niyeti verir."""
+    c = (command or "").strip()
+    if not c:
+        return "bir işlem yapmak"
+    low = c.lower()
+    # İlk yol/dosya-benzeri argümanı bul → sade ad (basename). Bayrakları (-x) atla.
+    target = ""
+    for tok in re.findall(r"[~/][\w./\-]+|\b[\w\-]+\.[\w\-]+\b", c):
+        name = tok.rstrip("/").split("/")[-1]
+        if name and not name.startswith("-"):
+            target = name
+            break
+    def w(withTarget: str, generic: str) -> str:
+        return f"{target} {withTarget}" if target else generic
+    # Yazma/değiştirme (redirect ya da yazan komutlar) — arama verb'inden ÖNCE bak.
+    if re.search(r">>?|\btee\b|sed\s+-i|\bcp\b|\bmv\b|\btouch\b|\bmkdir\b|\bdd\b", low):
+        return w("dosyasına yazmak", "bir dosyaya yazmak")
+    if re.match(r"(rm|rmdir|unlink)\b", low):
+        return w("dosyasını silmek", "bir dosya silmek")
+    if re.match(r"(grep|egrep|fgrep|rg|ag|ack)\b", low):
+        return w("dosyasında arama yapmak", "bir dosyada arama yapmak")
+    if re.match(r"(find|ls|tree|stat)\b", low):
+        return w("klasörüne bakmak", "bir klasöre bakmak")
+    if re.match(r"(cat|head|tail|less|more|bat|wc)\b", low):
+        return w("dosyasını okumak", "bir dosyayı okumak")
+    if re.match(r"(curl|wget)\b", low):
+        return "internetten veri indirmek"
+    if re.match(r"git\b", low):
+        return "bir git işlemi yapmak"
+    if re.match(r"(systemctl|service|launchctl|kill|pkill|killall)\b", low):
+        return "bir servisi yönetmek"
+    if re.match(r"(chmod|chown)\b", low):
+        return "dosya izinlerini değiştirmek"
+    if re.match(r"(docker|podman)\b", low):
+        return "bir konteyner işlemi yapmak"
+    if re.match(r"(python|python3|node|bash|sh|zsh|ruby|perl)\b", low):
+        return "bir program çalıştırmak"
+    first = low.split()[0].split("/")[-1]
+    return f"{first} komutunu çalıştırmak"
+
 # --- Endpointing / audio constants (1:1 with livekit_agent.py) ---
 SILENCE_RMS = 700
 SILENCE_AFTER_S = 1.0
@@ -1688,14 +1732,17 @@ class MateVoiceAdapter(BasePlatformAdapter):
         aid = uuid.uuid4().hex[:12]
         self._pending_approval = {"id": aid, "session_key": session_key}
         desc = str(description or command or "bir işlem")
+        # Karta giden bilgi burada elenir: ham komut/jargon yerine tek cümlelik niyet.
+        summary = _summarize_command(command)
         payload = json.dumps({"id": aid, "command": str(command or ""),
-                              "description": desc, "options": ["once", "always", "deny"]})
+                              "description": desc, "summary": summary,
+                              "options": ["once", "always", "deny"]})
         try:
             await self._room.local_participant.send_text(payload, topic="mate.approval")
         except Exception as e:
             log.warning("hermes_livekit: mate.approval publish hatası: %s", e)
         await self._speak_standalone(
-            f"Şunu yapmak için iznini istiyorum: {desc}. "
+            f"İzin istiyorum: {summary}. "
             "'onayla', 'sürekli izin ver' ya da 'reddet' de."
         )
         return SendResult(success=True, message_id=aid)
