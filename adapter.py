@@ -263,6 +263,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._tts_target_speaker_id: Optional[int] = None
         self._consume_tasks: Dict[str, asyncio.Task] = {}  # per-participant track consumers
         self._attr_cache: Dict[str, dict] = {}
+        # "Odada 3 kişi" modeli: kullanıcı, asistan (candan), Hermes. Slash-komut
+        # ("/...") = kullanıcının HERMES'e sözü, asistana değil → yanıtı YAZI olarak
+        # göster ama SESLENDİRME. Komut turu olan chat_id'ler burada; bayrak o
+        # chat'te bir sonraki NORMAL (sesli/konuşma) tura kadar durur, böylece
+        # gecikmeli/çok-parçalı komut çıktıları da sessiz kalır.
+        self._silent_command_chats: set = set()
         # Açık-komut enrollment durumu ("beni kaydet"): {emb, stage, name?,
         # name_emb?}. stage: ask_name → confirm. Oto-enroll YOK; bilinmeyen ses
         # sessizce guest. None = enrollment akışında değiliz.
@@ -1630,6 +1636,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
             pid = getattr(participant, "identity", None) or "guest"
             user_id, user_name = f"voice:{pid}", pid
             chat_id = self.room_name
+        # Komut turu → bu chat'in yanıtları sessiz (yalnız yazı); normal tur → aç.
+        if is_cmd:
+            self._silent_command_chats.add(chat_id)
+        else:
+            self._silent_command_chats.discard(chat_id)
         source = self.build_source(
             chat_id=chat_id,
             chat_name=self.room_name,
@@ -1917,6 +1928,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if content is None or not content.strip():
             self._set_agent_state("idle")
             return SendResult(success=True, message_id="suppressed")
+        # Slash-komut turunun yanıtı → Hermes'in çıktısı; yaz ama seslendirme
+        # ("odada 3 kişi": komutlar buradan yönetilmiyor, sadece görünsün).
+        if chat_id in self._silent_command_chats:
+            do_speak = False
         # Shutdown (SIGUSR1 self-restart): LiveKit kapanıyor, TTS'i BEKLEME (asma fix)
         # → yalnız transkript. (do_speak zaten kapatılır.)
         if self._shutting_down:
