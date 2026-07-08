@@ -326,6 +326,9 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # Her connect/reconnect'te sıfırlanır → tekrar bağlanınca yine karşılar.
         self._greeted_speakers: set = set()
         self._wake_at = 0.0
+        # Her uyanma bir "epoch". _consume_track açık sözü epoch değişince atar:
+        # wake anına kadar biriken ses wake kelimesinin kendisidir, komut değil.
+        self._wake_epoch = 0
         self._barge_in_enabled = True
         self._connected = False
         # RPC handshake v1: per-participant awake state (mate.set_awake ile beslenir).
@@ -1051,6 +1054,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 new_awake = changed.get("mate.awake")
                 if new_awake == "1" and prev == "0":
                     self._wake_at = time.monotonic()
+                    self._wake_epoch += 1
                 elif new_awake == "0":
                     self._wake_at = 0.0
                 if "mate.barge_in" in changed:
@@ -1127,6 +1131,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             self._awake_state[ident] = awake
             if awake and not prev:
                 self._wake_at = time.monotonic()
+                self._wake_epoch += 1
             elif not awake:
                 self._wake_at = 0.0
             log.info("hermes_livekit: mate.set_awake (%s): %s", ident, awake)
@@ -1294,12 +1299,31 @@ class MateVoiceAdapter(BasePlatformAdapter):
         last_barge_check_s = 0.0
         utterance_awake = False
         utterance_start_at = 0.0
+        wake_epoch = self._wake_epoch
         try:
             async for event in stream:
                 frame = event.frame
                 payload = bytes(frame.data)
                 if not payload:
                     continue
+
+                # UYANMA ANI: o ana kadar biriken ses wake kelimesinin KENDİSİ
+                # (+ öncesindeki gürültü) — komut değil. Açık sözü transkribe
+                # etmeden at, taze söz başlat. Aksi halde tek nefeste söylenen
+                # "candan, bana X söyler misin" tek söz olarak birikiyor
+                # (turn_min_endpointing_delay=2.2sn sessizlik olmadan bölünmez),
+                # sonra sözün BAŞLANGICINA bakan is_wake_word testi cümlenin
+                # tamamını wake kelimesi sanıp atıyordu. Chime'dan sonra söylenen
+                # cümle de aynı açık sözün içinde kalıyordu.
+                if self._wake_epoch != wake_epoch:
+                    wake_epoch = self._wake_epoch
+                    if stt is not None:
+                        try:
+                            await stt.abort()
+                        except Exception as e:  # noqa: BLE001 - abort best-effort
+                            log.debug("hermes_livekit: wake reset abort: %s", e)
+                        stt = None
+                    log.info("hermes_livekit: wake → açık söz atıldı, taze dinleme")
 
                 if stt is None:
                     attrs = self._attrs(participant)
