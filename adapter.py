@@ -1292,7 +1292,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         utterance_s = 0.0
         last_turn_check_s = 0.0
         last_barge_check_s = 0.0
-        utterance_awake = True
+        utterance_awake = False
         utterance_start_at = 0.0
         try:
             async for event in stream:
@@ -1303,13 +1303,6 @@ class MateVoiceAdapter(BasePlatformAdapter):
 
                 if stt is None:
                     attrs = self._attrs(participant)
-                    # RPC handshake awake state öncelikli; RPC hiç gelmemişse
-                    # eski mate.awake attribute'una düş (geriye uyum, flag-day yok).
-                    ident = getattr(participant, "identity", None)
-                    if ident in self._awake_state:
-                        utterance_awake = self._awake_state[ident]
-                    else:
-                        utterance_awake = attrs.get("mate.awake", "0") != "0"
                     engine_name, stt_host, stt_port = self.settings.resolve_stt_engine(
                         attrs.get("stt_engine")
                     )
@@ -1331,6 +1324,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                     last_turn_check_s = 0.0
                     last_barge_check_s = 0.0
                     utterance_start_at = 0.0
+                    utterance_awake = False  # söz başlarken doldurulur
 
                 await stt.feed(
                     WyomingEvent(
@@ -1352,6 +1346,20 @@ class MateVoiceAdapter(BasePlatformAdapter):
                         self._set_agent_state("listening")
                         self._debug("user_speech…")
                         utterance_start_at = time.monotonic()
+                        # Awake'i SÖZ BAŞLARKEN oku, STT oturumu yaratılırken DEĞİL.
+                        # Mic sürekli yayında: bir cevaptan hemen sonra (hâlâ UYANIK'ken)
+                        # yeni STT oturumu açılıyor. Awake orada örneklenirse, aradaki
+                        # sessizlikte gelen uyku (inaktivite re-arm ya da kullanıcının
+                        # mic düğmesi) görülmüyor ve uykudan sonraki ilk söz wake
+                        # kelimesi olmadan işleniyordu.
+                        # RPC handshake awake state öncelikli; RPC hiç gelmemişse
+                        # eski mate.awake attribute'una düş (geriye uyum, flag-day yok).
+                        ident = getattr(participant, "identity", None)
+                        if ident in self._awake_state:
+                            utterance_awake = self._awake_state[ident]
+                        else:
+                            utterance_awake = self._attrs(participant).get(
+                                "mate.awake", "0") != "0"
                     speech_seen = True
                     silence_s = 0.0
                     last_turn_check_s = 0.0
