@@ -32,6 +32,10 @@ _PIP_SPEC = {
     "huggingface_hub": "huggingface_hub",
     "sherpa_onnx": "sherpa-onnx",
     "qrcode": "qrcode",
+    # Sabit-pin (kortexa-ai/hermes-livekit tedarik-zinciri hijyeni): PyPI yeni
+    # bir Pillow'u kullanıcının kurulumuna niyet olmadan sokamaz. 12.2.0 =
+    # 2026-04-01, yank yok. Video kare JPEG encode için (vision).
+    "PIL": "Pillow==12.2.0",
 }
 
 # adapter/voice top-level'da daima gereken çekirdek modüller
@@ -41,6 +45,7 @@ _CORE_MODULES = ["numpy", "livekit.api", "livekit.rtc", "wyoming", "aiohttp"]
 _FEATURE_MODULES = {
     "turn_detector": ["numpy", "onnxruntime", "transformers", "huggingface_hub"],
     "speaker_id": ["numpy", "onnxruntime", "sherpa_onnx"],
+    "video": ["PIL"],
 }
 
 
@@ -87,7 +92,8 @@ def _pip_install(specs: list[str], timeout: int = 900) -> bool:
     return True
 
 
-def ensure_deps(*, core: bool = False, turn_detector: bool = False, speaker_id: bool = False) -> None:
+def ensure_deps(*, core: bool = False, turn_detector: bool = False,
+                speaker_id: bool = False, video: bool = False) -> None:
     """Etkin özelliklerin eksik modüllerini kur. Hepsi varsa no-op (hızlı).
     `core=True` ise adapter/voice top-level'ın daima gerektirdiği çekirdek
     modülleri (wyoming·livekit·aiohttp·numpy) de garanti edilir.
@@ -105,6 +111,8 @@ def ensure_deps(*, core: bool = False, turn_detector: bool = False, speaker_id: 
         wanted += _FEATURE_MODULES["turn_detector"]
     if speaker_id:
         wanted += _FEATURE_MODULES["speaker_id"]
+    if video:
+        wanted += _FEATURE_MODULES["video"]
     # dedupe, sırayı koru
     seen = set()
     wanted = [m for m in wanted if not (m in seen or seen.add(m))]

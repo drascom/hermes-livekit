@@ -204,6 +204,12 @@ def _summarize_command(command: str) -> str:
     first = low.split()[0].split("/")[-1]
     return f"{first} komutunu çalıştırmak"
 
+# Remote-tool adları: LLM'in tool ad sözleşmesi (harf başlar, alfanumerik+_).
+TOOL_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,63}$")
+# Client-kayıtlı tool'lar bu toolset'e girer — pairing tool'larıyla aynı toolset
+# (zaten aktif), böylece kayıt olur olmaz LLM'e görünür.
+REMOTE_TOOLSET_NAME = "hermes_livekit"
+
 # --- Endpointing / audio constants (1:1 with livekit_agent.py) ---
 SILENCE_RMS = 700
 SILENCE_AFTER_S = 1.0
@@ -334,6 +340,22 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # RPC handshake v1: per-participant awake state (mate.set_awake ile beslenir).
         # RPC-awake hiç gelmemişse gating eski mate.awake attribute'una düşer (geriye uyum).
         self._awake_state: Dict[str, bool] = {}
+        # Remote tools (kortexa-ai/hermes-livekit'ten uyarlandı, native RPC ile):
+        # client `mate.tool_register` ile bir tool duyurur → Hermes tools.registry'ye
+        # kaydolur → LLM seçince proxy `mate.tool_call` RPC'sini client'a atar,
+        # RPC YANITI doğrudan tool sonucudur (data-channel future-map GEREKMEZ —
+        # native RPC istek/yanıt korelasyonu SDK'da). _client_tools: identity→{ad},
+        # _tool_owners: ad→identity (unregister yetkisi + disconnect temizliği).
+        self._client_tools: Dict[str, set] = {}
+        self._tool_owners: Dict[str, str] = {}
+        self._tool_call_timeout = float(
+            os.environ.get("HERMES_LIVEKIT_TOOL_TIMEOUT_SEC", "30") or "30"
+        )
+        # On-demand video: track_subscribed'de VideoStream saklanır (EAGER iterate
+        # YOK); `mate.capture_frame` gelince tek kare JPEG'lenip _pending_captures'a
+        # eklenir, sıradaki MessageEvent'e media olarak iliştirilir.
+        self._video_streams: Dict[str, Any] = {}
+        self._pending_captures: list = []
         # Reconnect: LiveKit boş odayı empty_timeout ile kapatır (reason 10 =
         # ROOM_CLOSED) → ajan düşer. _want_connected True iken (kasıtlı disconnect
         # değil) kopuşta _reconnect_loop otomatik yeniden bağlanır. B (insan)
@@ -380,6 +402,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
             ensure_deps(
                 turn_detector=settings.turn_detector_enabled,
                 speaker_id=settings.speaker_id_enabled,
+                video=settings.video_capture_enabled,
             )
         except Exception as e:
             log.warning("hermes_livekit: deps ensure atlandı: %r", e)
@@ -1042,6 +1065,33 @@ class MateVoiceAdapter(BasePlatformAdapter):
                         dict(getattr(participant, "attributes", None) or {})
                     )
                 self._start_consume(rtc, track, participant)
+            elif (track.kind == rtc.TrackKind.KIND_VIDEO
+                    and participant.identity != "assistant"
+                    and self.settings.video_capture_enabled):
+                # Video'yu SÜREKLI decode ETME — sadece stream'i sakla. Kareler
+                # `mate.capture_frame` gelince tek tek çekilir (option C semantiği).
+                ident = getattr(participant, "identity", None)
+                if not ident:
+                    return
+                old = self._video_streams.pop(ident, None)
+                if old is not None:
+                    try:
+                        asyncio.create_task(old.aclose())
+                    except Exception:
+                        pass
+                self._video_streams[ident] = rtc.VideoStream(track)
+                log.info("hermes_livekit: video track'i abone (%s) — tetikle-çek", ident)
+
+        @room.on("participant_disconnected")
+        def _on_participant_disconnected(participant):
+            ident = getattr(participant, "identity", None)
+            if not ident:
+                return
+            # Client'ın kayıtlı tool'larını registry'den düşür + video stream'ini kapat.
+            if ident in self._client_tools:
+                log.info("hermes_livekit: %s koptu → tool'ları temizleniyor", ident)
+                self._cleanup_client_tools(ident)
+            self._video_streams.pop(ident, None)
 
         @room.on("participant_attributes_changed")
         def _on_attrs_changed(changed_attributes, participant):
@@ -1089,6 +1139,11 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._onboarding_asked = False
         self._barge_in_enabled = True
         self._wake_at = 0.0
+        # Yeni bağlantı = taze durum: eski client'ın kayıtlı tool'larını registry'den
+        # düşür, bekleyen kareleri at (stale owner identity'leri kalmasın).
+        self._cleanup_all_client_tools()
+        self._video_streams = {}
+        self._pending_captures = []
 
         token = self._mint_token()
         await room.connect(self.settings.livekit_url, token)
@@ -1191,6 +1246,22 @@ class MateVoiceAdapter(BasePlatformAdapter):
             asyncio.create_task(self._dispatch_turn("/stop", sname_s, sid_s, participant, None))
             return json.dumps({"ok": True})
 
+        async def _rpc_tool_register(data: "rtc.RpcInvocationData") -> str:
+            """Client bir tool duyurur → Hermes registry'ye kaydeder. Yanıt: ack."""
+            return await self._register_client_tool(
+                data.caller_identity, data.payload or "{}")
+
+        async def _rpc_tool_unregister(data: "rtc.RpcInvocationData") -> str:
+            """Client bir tool'u geri çeker."""
+            return await self._unregister_client_tool(
+                data.caller_identity, data.payload or "{}")
+
+        async def _rpc_capture_frame(data: "rtc.RpcInvocationData") -> str:
+            """Client kamera anlık görüntüsü ister → sıradaki video karesi JPEG'lenip
+            sıradaki mesaja iliştirilir (vision). Yanıt: ack (kare async yakalanır)."""
+            asyncio.create_task(self._capture_next_frame(data.caller_identity))
+            return json.dumps({"ok": True})
+
         try:
             room.local_participant.register_rpc_method("mate.hello", _rpc_hello)
             room.local_participant.register_rpc_method("mate.set_awake", _rpc_set_awake)
@@ -1200,6 +1271,12 @@ class MateVoiceAdapter(BasePlatformAdapter):
                 "mate.update.resolve", _rpc_update_resolve)
             room.local_participant.register_rpc_method(
                 "mate.interrupt", _rpc_interrupt)
+            room.local_participant.register_rpc_method(
+                "mate.tool_register", _rpc_tool_register)
+            room.local_participant.register_rpc_method(
+                "mate.tool_unregister", _rpc_tool_unregister)
+            room.local_participant.register_rpc_method(
+                "mate.capture_frame", _rpc_capture_frame)
         except Exception as e:
             log.warning("hermes_livekit: RPC kayıt atlandı (%r)", e)
 
@@ -1259,6 +1336,10 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._tts_task:
             self._tts_task.cancel()
             self._tts_task = None
+        # Client-kayıtlı tool'ları registry'den düşür + bekleyen kareleri at.
+        self._cleanup_all_client_tools()
+        self._video_streams = {}
+        self._pending_captures = []
         # Gateway tool-onayı: bekleyen onayı temizle.
         self._pending_approval = None
         for ident in list(self._pending_dispatch.keys()):
@@ -1739,10 +1820,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
         self._set_agent_state("thinking")
         prev_speaker_id = self._active_turn_speaker_id
         self._active_turn_speaker_id = speaker_id
+        # Bekleyen kamera kareleri (mate.capture_frame) bu mesaja iliştirilir →
+        # Hermes vision pipeline'ı (image_input_mode: auto) işler.
+        media_urls, media_types = self._drain_pending_captures()
         try:
             await self.handle_message(MessageEvent(
                 text=hermes_text, message_type=MessageType.TEXT, source=source,
                 message_id=str(int(time.time() * 1000)),
+                media_urls=media_urls, media_types=media_types,
             ))
         finally:
             self._active_turn_speaker_id = prev_speaker_id
@@ -1751,6 +1836,172 @@ class MateVoiceAdapter(BasePlatformAdapter):
         if self._pending_update_version and not self._update_offer_announced:
             self._update_offer_announced = True
             asyncio.create_task(self._announce_update())
+
+    # ── Remote tools (client-kayıtlı, native RPC) ────────────────────────
+    async def _register_client_tool(self, identity: str, payload: str) -> str:
+        """`mate.tool_register` gövdesi: {name, description, input_schema}.
+        Doğrula → Hermes registry'ye proxy handler ile kaydet → ack döndür."""
+        try:
+            msg = json.loads(payload or "{}")
+        except (ValueError, TypeError):
+            return json.dumps({"ok": False, "reason": "bad-payload"})
+        name = (msg.get("name") or "").strip()
+        description = msg.get("description") or ""
+        input_schema = msg.get("input_schema")
+        if not identity:
+            return json.dumps({"ok": False, "reason": "no-identity"})
+        if not TOOL_NAME_RE.match(name):
+            return json.dumps({"ok": False, "name": name, "reason": "name-invalid"})
+        if not isinstance(input_schema, dict) or input_schema.get("type") != "object":
+            return json.dumps({"ok": False, "name": name, "reason": "schema-invalid"})
+        try:
+            from tools.registry import registry
+        except Exception as exc:
+            log.error("hermes_livekit: tool registry yok: %s", exc)
+            return json.dumps({"ok": False, "name": name, "reason": "registry-unavailable"})
+        handler = self._build_tool_handler(identity, name)
+        # registry `schema` = OpenAI function-envelope ({name, description,
+        # parameters}) — client'ın ham JSON Schema'sını sarmalıyoruz.
+        registry_schema = {"name": name, "description": description, "parameters": input_schema}
+        try:
+            # override=True: reconnect eden client explicit unregister olmadan
+            # yeniden kaydedebilsin. Tek-client v1 (kortexa tasarım dokümanı gibi).
+            registry.register(
+                name=name, toolset=REMOTE_TOOLSET_NAME, schema=registry_schema,
+                handler=handler, is_async=True, description=description, override=True,
+            )
+        except Exception as exc:
+            log.warning("hermes_livekit: tool register %r başarısız: %s", name, exc)
+            return json.dumps({"ok": False, "name": name, "reason": "register-failed",
+                               "detail": str(exc)})
+        self._client_tools.setdefault(identity, set()).add(name)
+        self._tool_owners[name] = identity
+        log.info("hermes_livekit: client %s tool kaydetti %r", identity, name)
+        return json.dumps({"ok": True, "name": name})
+
+    async def _unregister_client_tool(self, identity: str, payload: str) -> str:
+        try:
+            msg = json.loads(payload or "{}")
+        except (ValueError, TypeError):
+            return json.dumps({"ok": False, "reason": "bad-payload"})
+        name = (msg.get("name") or "").strip()
+        if self._tool_owners.get(name) != identity:
+            return json.dumps({"ok": False, "name": name, "reason": "not-owned-by-you"})
+        self._deregister_tool(name, identity)
+        return json.dumps({"ok": True, "name": name})
+
+    def _build_tool_handler(self, owner_identity: str, registered_name: str):
+        """LLM tool'u seçince Hermes'in çağıracağı async fn. `mate.tool_call`
+        RPC'sini owner client'a atar; RPC YANITI doğrudan tool sonucudur.
+        İmza Hermes ToolRegistry sözleşmesi: handler(args_dict, **kwargs)."""
+        async def proxy(args: "Optional[Dict[str, Any]]" = None, **_kwargs: Any) -> Any:
+            from livekit import rtc
+            arguments: Dict[str, Any] = dict(args or {})
+            room = self._room
+            if room is None or owner_identity not in room.remote_participants:
+                raise RuntimeError(
+                    f"tool {registered_name!r} sahibi {owner_identity!r} bağlı değil")
+            try:
+                resp = await room.local_participant.perform_rpc(
+                    destination_identity=owner_identity,
+                    method="mate.tool_call",
+                    payload=json.dumps({"name": registered_name, "arguments": arguments}),
+                    response_timeout=self._tool_call_timeout,
+                )
+            except rtc.RpcError as e:
+                raise RuntimeError(
+                    f"remote tool {registered_name!r} RPC hatası: {getattr(e, 'message', e)}")
+            # Client string döndürür: JSON {result|error} ya da düz metin.
+            try:
+                data = json.loads(resp) if resp else {}
+            except (ValueError, TypeError):
+                return resp
+            if isinstance(data, dict):
+                if "error" in data:
+                    raise RuntimeError(str(data["error"]))
+                if "result" in data:
+                    return data["result"]
+            return data
+        return proxy
+
+    def _deregister_tool(self, name: str, identity: str) -> None:
+        try:
+            from tools.registry import registry
+            registry.deregister(name)
+        except Exception as exc:
+            log.debug("hermes_livekit: tool deregister %r başarısız: %s", name, exc)
+        self._tool_owners.pop(name, None)
+        tools = self._client_tools.get(identity)
+        if tools:
+            tools.discard(name)
+            if not tools:
+                self._client_tools.pop(identity, None)
+
+    def _cleanup_client_tools(self, identity: str) -> None:
+        """identity'nin tüm tool'larını registry'den kaldır (disconnect'te)."""
+        for name in list(self._client_tools.get(identity, set())):
+            self._deregister_tool(name, identity)
+
+    def _cleanup_all_client_tools(self) -> None:
+        for identity in list(self._client_tools.keys()):
+            self._cleanup_client_tools(identity)
+        self._client_tools.clear()
+        self._tool_owners.clear()
+
+    # ── On-demand video → vision ─────────────────────────────────────────
+    async def _capture_next_frame(self, identity: str) -> None:
+        """identity'nin SIRADAKİ video karesini çek, JPEG'le, _pending_captures'a
+        koy. Kare bir sonraki kullanıcı mesajına (dispatch) iliştirilir."""
+        try:
+            from PIL import Image
+        except Exception:
+            log.warning("hermes_livekit: Pillow yok — kare yakalama atlandı")
+            return
+        stream = self._video_streams.get(identity)
+        if stream is None:
+            log.info("hermes_livekit: capture-frame ama %s'in video track'i yok", identity)
+            return
+        try:
+            # VideoStream async iterator; bir kare al ve çık.
+            frame_event = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        except (asyncio.TimeoutError, StopAsyncIteration) as exc:
+            log.warning("hermes_livekit: %s kare yakalama zaman aşımı: %s", identity, exc)
+            return
+        try:
+            from io import BytesIO
+            from livekit.rtc import VideoBufferType
+            frame = frame_event.frame
+            rgba = frame.convert(VideoBufferType.RGBA)
+            img = Image.frombytes("RGBA", (rgba.width, rgba.height), bytes(rgba.data))
+            img = img.convert("RGB")  # JPEG alfa taşımaz
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            jpeg = buf.getvalue()
+        except Exception as exc:
+            log.error("hermes_livekit: kare encode başarısız (%s): %s", identity, exc)
+            return
+        import tempfile
+        import uuid
+        tmp_dir = os.path.join(tempfile.gettempdir(), "hermes_livekit")
+        os.makedirs(tmp_dir, exist_ok=True)
+        path = os.path.join(tmp_dir, f"frame_{uuid.uuid4().hex[:12]}.jpg")
+        with open(path, "wb") as f:
+            f.write(jpeg)
+        self._pending_captures.append((path, "image/jpeg"))
+        log.info("hermes_livekit: %s'den %dx%d kare yakalandı (%d bayt) — bekleyen=%d",
+                 identity, frame.width, frame.height, len(jpeg), len(self._pending_captures))
+
+    def _drain_pending_captures(self) -> "tuple[list, list]":
+        """Bekleyen kareleri (urls, types) listelerine boşalt. Dosyalar burada
+        SİLİNMEZ — Hermes agent loop handle_message'dan sonra okur (fire-and-forget);
+        <tempdir>/hermes_livekit/ altında, OS tempdir temizliğine bırakılır."""
+        urls: list = []
+        types: list = []
+        while self._pending_captures:
+            path, mime = self._pending_captures.pop(0)
+            urls.append(path)
+            types.append(mime)
+        return urls, types
 
     # ── Gateway tool-onayı (approval gidip-gel) ──────────────────────────
     async def send_exec_approval(self, chat_id: str, command: str, session_key: str,

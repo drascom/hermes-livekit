@@ -207,6 +207,9 @@ class _Settings:
         # Oto-onboarding: bağlantıda ilk BİLİNMEYEN ses duyulunca bir kez
         # "seni tanımıyorum, adın ne?" diye sorup enroll ak. Ret → sessiz guest.
         self.onboarding_enabled = _b("ONBOARDING_ENABLED", True)
+        # On-demand video kare yakalama (vision). Açıkken video track'ler subscribe
+        # edilip `mate.capture_frame` ile tek kare çekilebilir; Pillow auto-install.
+        self.video_capture_enabled = _b("MATE_VOICE_VIDEO_CAPTURE_ENABLED", True)
         self.barge_in_speaker_gate = _b("BARGE_IN_SPEAKER_GATE", True)
         self.barge_in_speaker_min_seconds = _f("BARGE_IN_SPEAKER_MIN_SECONDS", 0.6)
         self.barge_in_speaker_threshold = _f("BARGE_IN_SPEAKER_THRESHOLD", self.speaker_threshold)
