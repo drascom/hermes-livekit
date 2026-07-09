@@ -204,6 +204,27 @@ def _summarize_command(command: str) -> str:
     first = low.split()[0].split("/")[-1]
     return f"{first} komutunu çalıştırmak"
 
+# OmniVoice non-verbal etiketleri (13 SABİT): metne [etiket] gömülür, OmniVoice
+# TTS bunları seslendirir (kahkaha/iç-çekiş/şaşkınlık…). Etiketler TTS'e GİDER ama
+# transkriptte GÖSTERİLMEZ (çirkin "[laughter]") → send() transkript yolunda strip.
+# Agent bunları anlam-farkındalıklı serpiştirir (SOUL talimatı, sunucu tarafı).
+_OMNI_TAG_RE = re.compile(
+    r"\s*\[(?:laughter|sigh|confirmation-en"
+    r"|question-(?:en|ah|oh|ei|yi)"
+    r"|surprise-(?:ah|oh|wa|yo)"
+    r"|dissatisfaction-hnn)\]",
+    re.IGNORECASE,
+)
+
+
+def _strip_omni_tags(text: str) -> str:
+    """OmniVoice [etiket]'lerini çıkar (transkript/gösterim için; TTS metni ham kalır).
+    Etiketten önceki boşluğu da yutar → çift boşluk/baş-son boşluk kalmaz."""
+    if not text or "[" not in text:
+        return text
+    return _OMNI_TAG_RE.sub("", text).strip()
+
+
 # Remote-tool adları: LLM'in tool ad sözleşmesi (harf başlar, alfanumerik+_).
 TOOL_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,63}$")
 # Client-kayıtlı tool'lar bu toolset'e girer — pairing tool'larıyla aynı toolset
@@ -2266,11 +2287,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
         # → yalnız transkript. (do_speak zaten kapatılır.)
         if self._shutting_down:
             do_speak = False
-        # Transkript (yalnız göster=True).
+        # Transkript (yalnız göster=True). OmniVoice etiketleri TTS'e gider ama
+        # ekrana YAZILMAZ → transkript metninden strip et.
         if do_show:
-            asyncio.create_task(
-                self._publish_text(content, track_sid=self._pub_track_sid, role="assistant")
-            )
+            shown = _strip_omni_tags(content)
+            if shown:
+                asyncio.create_task(
+                    self._publish_text(shown, track_sid=self._pub_track_sid, role="assistant")
+                )
         # Seslendirme yok → burada bitir (sistem/durum = yalnız yazı).
         if not do_speak:
             self._set_agent_state("idle")
