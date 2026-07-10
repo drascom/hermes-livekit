@@ -200,6 +200,7 @@ def build_config(settings, room: str, request_host: str = "") -> dict:
     request_host: pairing isteğinin Host header'ı (portsuz) — livekit/gateway
     URL'leri açık env yoksa bundan türetilir (IP-only, mesh, domain hepsi doğru)."""
     return {
+        "instance_id": settings.instance_id,
         "livekit_url": client_livekit_url(settings, request_host),
         "room": room,
         "token_endpoint": public_base_url(request_host),

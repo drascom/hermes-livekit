@@ -1,7 +1,7 @@
 name: hermes_livekit
 label: Hermes LiveKit
 kind: platform
-version: 0.2.49
+version: 0.2.50
 description: >
   LiveKit voice platform adapter for Hermes Agent. Carries the Mate voice
   stack (RMS endpointing, smart-turn v3 EOU, barge-in, wake-word gate,
@@ -66,8 +66,8 @@ optional_env:
     prompt: "Public LiveKit URL"
     password: false
   - name: MATE_LIVEKIT_ROOM
-    description: "Room the agent joins (default: mate-hermes-test — separate from brain's mate-demo)"
-    prompt: "LiveKit room"
+    description: "Instance-owned stable room. Leave empty/auto (recommended); an explicit value overrides it. Legacy mate-hermes-test migrates to auto."
+    prompt: "LiveKit room (boş/auto = instance'a özel)"
     password: false
   - name: STT_LANGUAGE
     description: "Forced STT language (tr/en). Empty = per-client attribute / auto."

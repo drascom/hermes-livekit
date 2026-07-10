@@ -762,6 +762,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         from aiohttp import web
         return web.json_response({
             "status": "ok",
+            "instance_id": self.settings.instance_id,
             "room": self.room_name,
             "connected": bool(self._connected),
             "url": self._client_url(request),
@@ -777,7 +778,14 @@ class MateVoiceAdapter(BasePlatformAdapter):
         identity = (request.query.get("identity") or "").strip()
         if not identity:
             return web.json_response({"error": "identity required"}, status=400)
-        room = (request.query.get("room") or "").strip() or self.room_name
+        requested_room = (request.query.get("room") or "").strip()
+        room = self.room_name
+        if requested_room and requested_room != room:
+            log.info(
+                "hermes_livekit: istemci oda override'ı yok sayıldı requested=%s instance_room=%s",
+                requested_room,
+                room,
+            )
         try:
             token = self._mint_client_token(identity, room)
         except Exception as e:
@@ -786,6 +794,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
         log.info("hermes_livekit: token verildi identity=%s room=%s", identity, room)
         return web.json_response({
             "url": self._client_url(request),
+            "instance_id": self.settings.instance_id,
             "room": room,
             "token": token,
             "identity": identity,
@@ -817,6 +826,7 @@ class MateVoiceAdapter(BasePlatformAdapter):
                  identity, room, self.settings.demo_token_ttl_seconds)
         return web.json_response({
             "url": self._client_url(request),
+            "instance_id": self.settings.instance_id,
             "room": room,
             "token": token,
             "identity": identity,
@@ -2723,8 +2733,8 @@ def interactive_setup() -> None:
         save_env_value("MATE_PUBLIC_LIVEKIT_URL", public_livekit.strip())
 
     room = prompt(
-        "LiveKit room",
-        default=get_env_value("MATE_LIVEKIT_ROOM") or "mate-hermes-test",
+        "LiveKit room (auto = this installation's stable room)",
+        default=get_env_value("MATE_LIVEKIT_ROOM") or "auto",
     )
     if room:
         save_env_value("MATE_LIVEKIT_ROOM", room.strip())

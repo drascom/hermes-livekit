@@ -15,6 +15,8 @@ import secrets
 import sys
 from pathlib import Path
 
+from .instance import is_auto_room, load_instance_identity
+
 _PLUGIN_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"  # <plugin>/.env
 
 
@@ -227,12 +229,18 @@ class _Settings:
         self.turn_recheck_interval = _f("TURN_RECHECK_INTERVAL", 0.4)
 
         # --- LiveKit ---
-        # MATE_LIVEKIT_ROOM lets the plugin join a SEPARATE room from brain's
-        # agent (mate-demo) so the two don't collide. Falls back to LIVEKIT_ROOM.
+        # Every plugin installation owns a stable generated room. The legacy
+        # default `mate-hermes-test` migrates to auto; a different explicit
+        # MATE_LIVEKIT_ROOM remains an operator override. Never inherit the
+        # brain's LIVEKIT_ROOM: two gateways would otherwise collide.
         self.livekit_url = _s("LIVEKIT_URL", "ws://127.0.0.1:7880")
         self.livekit_api_key = _s("LIVEKIT_API_KEY", "devkey")
         self.livekit_api_secret = _s("LIVEKIT_API_SECRET", "")
-        self.livekit_room = _s("MATE_LIVEKIT_ROOM", _s("LIVEKIT_ROOM", "mate-hermes-test"))
+        configured_room = _s("MATE_LIVEKIT_ROOM", "auto")
+        instance = load_instance_identity(configured_room)
+        self.instance_id = instance.instance_id
+        self.livekit_room = instance.room
+        self.instance_state_path = str(instance.state_path)
         self.livekit_token_ttl_seconds = _i("LIVEKIT_TOKEN_TTL_SECONDS", 3600)
         # Public LiveKit URL handed to CLIENTS via the token endpoint (clients
         # can't reach the agent's internal ws://127.0.0.1:7880). Falls back to
@@ -250,7 +258,10 @@ class _Settings:
         # --- Onboarding (sihirbaz): açık /mate/demo-token rotası (key'siz, kısa
         #     ömürlü). onboarding_room boşsa ana odaya düşülür (agent zaten orada)
         #     → iki-oda (S3) gelene kadar demo işlevsel kalır. ---
-        self.onboarding_room = _s("MATE_ONBOARDING_ROOM", "") or self.livekit_room
+        onboarding_room = _s("MATE_ONBOARDING_ROOM", "")
+        self.onboarding_room = (
+            self.livekit_room if is_auto_room(onboarding_room) else onboarding_room
+        )
         self.demo_token_ttl_seconds = _i("MATE_VOICE_DEMO_TOKEN_TTL", 600)
         # Açık demo rotası güvenlik kapısı: varsayılan AÇIK; kapatmak için "0".
         self.demo_token_enabled = _b("MATE_VOICE_DEMO_TOKEN_ENABLED", True)

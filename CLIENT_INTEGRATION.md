@@ -18,7 +18,8 @@ Plugin gateway içinde küçük bir HTTP sunucu çalıştırır (env ile yapıla
 ```json
 {
   "url": "wss://your-livekit.example.com",
-  "room": "mate-hermes-test",
+  "instance_id": "7f3a91c2d4e5b607",
+  "room": "mate-7f3a91c2d4e5b607",
   "token": "<jwt>",
   "identity": "<client-id>"
 }

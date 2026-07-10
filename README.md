@@ -17,6 +17,12 @@ hermes plugins update hermes_livekit
 hermes gateway restart
 ```
 
+Each installation creates a stable instance id and LiveKit room on first run.
+The state is stored outside the plugin checkout at
+`~/.hermes/mate_voice/instance.json`, so plugin updates and gateway restarts do
+not change the room. Pairing and token responses carry the resolved room to
+clients; clients should not hard-code `MATE_LIVEKIT_ROOM`.
+
 ## Uninstall
 
 `hermes plugins remove hermes_livekit` deletes only the plugin code — the

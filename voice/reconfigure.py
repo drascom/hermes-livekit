@@ -15,7 +15,7 @@ FIELDS = [
     ("LIVEKIT_API_KEY", "LiveKit API key"),
     ("LIVEKIT_API_SECRET", "LiveKit API secret"),
     ("MATE_PUBLIC_LIVEKIT_URL", "Public LiveKit URL (client/app, wss://...)"),
-    ("MATE_LIVEKIT_ROOM", "LiveKit oda adı"),
+    ("MATE_LIVEKIT_ROOM", "LiveKit oda adı (auto = bu kuruluma özel)"),
     ("STT_HOST", "STT host"),
     ("STT_PORT", "STT port"),
     ("STT_LANGUAGE", "STT dili (tr/en)"),
@@ -122,12 +122,14 @@ def run_show_key(args=None) -> int:
     # Bağlantı için gereken özet (varsa)
     livekit = (get_env_value("MATE_PUBLIC_LIVEKIT_URL")
                or get_env_value("LIVEKIT_URL") or "").strip()
-    room = (get_env_value("MATE_LIVEKIT_ROOM") or "").strip()
+    from .instance import load_instance_identity
+
+    configured_room = (get_env_value("MATE_LIVEKIT_ROOM") or "auto").strip()
+    room = load_instance_identity(configured_room).room
     port = (get_env_value("MATE_VOICE_TOKEN_PORT") or "8830").strip()
     print("\nBağlantı özeti:")
     if livekit:
         print(f"  LiveKit URL : {livekit}")
-    if room:
-        print(f"  Oda         : {room}")
+    print(f"  Oda         : {room}")
     print(f"  Token portu : {port}")
     return 0
